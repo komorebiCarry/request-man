@@ -1,0 +1,72 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <idea-version since-build="251"/>
+    <!-- Unique identifier of the plugin. It should be FQN. It cannot be changed between the plugin versions. -->
+    <id>com.ljh.request.request-man</id>
+
+    <!-- Public plugin name should be written in Title Case.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-name -->
+    <name>RequestMan</name>
+    <version>1.0.1</version>
+
+    <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
+    <vendor url="https://github.com/komorebiCarry/request-man">komorebiCarry</vendor>
+
+    <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
+         Guidelines: https://plugins.jetbrains.com/docs/marketplace/plugin-overview-page.html#plugin-description -->
+    <description><![CDATA[
+<b>RequestMan</b> - A powerful API testing and documentation generation tool integrated into IntelliJ IDEA. Supports both "API scanning mode" and "custom API mode" for efficient development and API management.<br>
+<br>
+<b>RequestMan</b> - 一款集成于 IntelliJ IDEA 的接口调试与文档生成工具，支持"接口扫描模式"与"自定义接口模式"自由切换，助力高效开发与接口管理。<br>
+<br>
+<b>核心功能：</b>
+<ul>
+  <li><b>智能接口扫描：</b> 一键扫描项目中的 Spring 接口（<code>@RestController</code>、<code>@RequestMapping</code>），自动生成接口列表、参数结构，支持文档预览与 JSON 示例生成</li>
+  <li><b>自定义接口管理：</b> 手动添加、编辑、保存自定义 API，支持多种请求体类型、认证、后置操作等高级功能</li>
+  <li><b>环境与变量管理：</b> 支持多环境配置，全局变量管理，使用 <code>{{变量名}}</code> 动态引用</li>
+  <li><b>高效搜索定位：</b> 快捷键 <b>Ctrl+Alt+/</b> 一键搜索，支持按 URL、方法名、三方包等多维度检索</li>
+  <li><b>响应处理与文档：</b> 响应折叠、JSON 格式化、文档预览、内置 JSONPath 提取器</li>
+  <li><b>接口导入导出：</b> 支持接口集合的导入导出，使用标准 JSON 格式进行数据交换</li>
+</ul>
+<br>
+<b>快速开始：</b>
+<ol>
+  <li><b>插件设置：</b> 在 IDEA 设置中选择 <b>RequestMan Settings</b>，配置环境管理和全局变量</li>
+  <li><b>接口扫描：</b> 打开工具窗口，点击"刷新接口"自动扫描 Spring 接口，选择接口进行调试</li>
+  <li><b>自定义接口：</b> 切换模式，点击"新增接口"创建自定义 API，支持多种 Body 类型和后置操作</li>
+  <li><b>接口搜索：</b> 按 <b>Ctrl+Alt+/</b> 快速搜索和定位接口</li>
+  <li><b>变量引用：</b> 在参数中使用 <code>{{变量名}}</code> 动态引用全局变量</li>
+</ol>
+<br>
+<em>Version: 1.0.1</em>
+    ]]></description>
+
+    <!-- Product and plugin compatibility requirements.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-compatibility.html -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+    <depends>com.intellij.modules.java</depends>
+    <!-- Extension points defined by the plugin.
+         Read more: https://plugins.jetbrains.com/docs/intellij/plugin-extension-points.html -->
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="RequestMan"
+                    factoryClass="com.ljh.request.requestman.ui.RequestManToolWindowFactory"
+                    anchor="right"
+                    icon="/META-INF/pluginIconRight.svg"/>
+        <applicationConfigurable instance="com.ljh.request.requestman.ui.RequestManSettingsConfigurable"
+            displayName="RequestMan Settings"/>
+        <notificationGroup
+            id="RequestMan"
+            displayType="BALLOON"
+            isLogByDefault="false"/>
+        <postStartupActivity implementation="com.ljh.request.requestman.startup.RequestManStartupActivity"/>
+    </extensions>
+    <actions>
+        <action id="com.ljh.request.requestman.ShowApiSearchAction"
+                class="com.ljh.request.requestman.action.ShowApiSearchAction"
+                text="接口搜索"
+                description="弹出接口搜索窗口">
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt SLASH"/>
+        </action>
+    </actions>
+</idea-plugin>
