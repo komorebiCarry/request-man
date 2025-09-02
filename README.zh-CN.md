@@ -12,8 +12,8 @@
 
 **一款集成于 IntelliJ IDEA 的接口调试与文档生成工具**
 
-[![Version](https://img.shields.io/badge/version-0.9.9-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
-[![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ%20IDEA-2023.1+-green.svg)](https://www.jetbrains.com/idea/)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
+[![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ%20IDEA-2024.1+-green.svg)](https://www.jetbrains.com/idea/)
 [![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 </div>
