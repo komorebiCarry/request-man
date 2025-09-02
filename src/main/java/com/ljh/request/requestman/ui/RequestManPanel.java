@@ -1,9 +1,15 @@
 package com.ljh.request.requestman.ui;
 
 import cn.hutool.http.HttpResponse;
+import cn.hutool.json.JSON;
+import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONUtil;
+import com.f.Z.K.S;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.util.PropertiesComponent;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
@@ -16,23 +22,30 @@ import com.intellij.psi.PsiMethod;
 import com.intellij.psi.PsiParameter;
 import com.intellij.psi.util.PsiTreeUtil;
 import com.ljh.request.requestman.enums.ContentType;
+import com.ljh.request.requestman.enums.ParamDataType;
 import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.model.ApiParam;
 import com.ljh.request.requestman.model.CustomApiInfo;
 import com.ljh.request.requestman.search.ApiSearchPopup;
 import com.ljh.request.requestman.ui.PostOpPanel.PostOpItem;
-import com.ljh.request.requestman.util.ApiInfoExtractor;
-import com.ljh.request.requestman.util.CustomApiStorage;
-import com.ljh.request.requestman.util.PerformanceMonitor;
-import com.ljh.request.requestman.util.ProjectSettingsManager;
-import com.ljh.request.requestman.util.RequestSender;
-import com.ljh.request.requestman.util.VariableManager;
+import com.ljh.request.requestman.util.*;
+import com.ljh.request.requestman.util.RequestManBundle;
 import com.ljh.request.requestman.ui.ImportExportDialog;
+import com.ljh.request.requestman.ui.builder.RequestViewBuilders;
+import com.ljh.request.requestman.ui.builder.TopPanelBuilder;
+import com.ljh.request.requestman.ui.builder.RequestPanelsBuilder;
+import com.ljh.request.requestman.ui.builder.CustomEditPanelsBuilder;
+import com.ljh.request.requestman.util.TableEditingManager;
+import org.apache.commons.lang3.StringUtils;
 
 import javax.swing.*;
 import javax.swing.border.Border;
+import javax.swing.DropMode;
+import javax.swing.TransferHandler;
 import java.awt.*;
+import java.awt.datatransfer.Transferable;
 import java.io.File;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -43,12 +56,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.WeakHashMap;
 
 /**
  * RequestMan主面板，负责集成和展示接口列表、参数编辑、请求发送、响应展示等核心功能。
@@ -83,25 +96,24 @@ public class RequestManPanel extends JPanel {
      * 统一参数Tab内容高度
      */
     private static final Dimension PARAM_PANEL_SIZE = new Dimension(600, 120);
-    /**
-     * 本地持久化缓存文件后缀
-     */
-    private static final String CACHE_SUFFIX = ".json";
-    /**
-     * 内存缓存，避免频繁读写磁盘，LRU策略最大200条，防止内存泄漏
-     */
-    private final Map<String, Map<String, Object>> localCache = new LinkedHashMap<>() {
-        private static final int MAX_ENTRIES = 200;
 
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, Map<String, Object>> eldest) {
-            if (size() > MAX_ENTRIES) {
-                return true;
-            } else {
-                return false;
-            }
-        }
-    };
+    /**
+     * 拖拽起始索引
+     */
+    private int dragIndex = -1;
+    /**
+     * 列表变更持久化防抖
+     */
+    private Timer persistDebounce;
+    /**
+     * 拖拽插入位置索引（用于渲染分割线）
+     */
+    private int dropLineIndex = -1;
+    /**
+     * 是否为插入模式（JList DropLocation.isInsert）
+     */
+    private boolean dropInsert = true;
+
     /**
      * Headers 参数面板，便于持久化操作
      */
@@ -118,6 +130,10 @@ public class RequestManPanel extends JPanel {
      * PostOp 参数面板，便于持久化操作
      */
     private PostOpPanel postOpPanel;
+    /**
+     * PreOpPanel 参数面板，便于持久化操作
+     */
+    private PreOpPanel preOpPanel;
     /**
      * 模式切换按钮（单一按钮，图标随模式切换）
      */
@@ -152,7 +168,11 @@ public class RequestManPanel extends JPanel {
     /**
      * 自定义接口参数编辑面板
      */
-    private EditableParamsPanel customParamsPanel;
+    private ParamsTablePanel customParamsPanel;
+    /**
+     * 自定义接口前置操作编辑面板
+     */
+    private PreOpPanel customPreOpPanel;
     /**
      * 自定义接口后置操作编辑面板
      */
@@ -160,7 +180,7 @@ public class RequestManPanel extends JPanel {
     /**
      * 主界面参数面板（自动扫描模式专用）
      */
-    private ParamsPanel paramsPanel;
+    private ParamsTablePanel paramsPanel;
     /**
      * 主界面Body参数面板（自动扫描模式专用）
      */
@@ -174,22 +194,9 @@ public class RequestManPanel extends JPanel {
      */
     private JPanel customEditPanelSendBtnPanel;
     /**
-     * 线程池，用于异步处理请求发送等操作
-     * 使用ThreadPoolExecutor手动创建，避免使用Executors工具类
+     * 线程池已移至RequestSenderManager中统一管理
+     * 此处不再需要重复定义
      */
-    private static final ExecutorService EXECUTOR = new ThreadPoolExecutor(
-            2, // 核心线程数
-            4, // 最大线程数
-            60L, // 空闲线程存活时间
-            TimeUnit.SECONDS, // 时间单位
-            new LinkedBlockingQueue<>(100), // 工作队列
-            r -> {
-                Thread t = new Thread(r, "RequestMan-Worker");
-                t.setDaemon(true);
-                return t;
-            },
-            new ThreadPoolExecutor.CallerRunsPolicy() // 拒绝策略
-    );
 
     /**
      * 统计执行器，用于定期更新插件线程数量统计
@@ -238,23 +245,17 @@ public class RequestManPanel extends JPanel {
 
     /**
      * 静态初始化块，添加JVM关闭时的清理
+     * 注意：请求发送线程池已在RequestSenderManager中管理
      */
     static {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {
-                // 关闭主执行器
-                EXECUTOR.shutdown();
-                if (!EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)) {
-                    EXECUTOR.shutdownNow();
-                }
-                
                 // 关闭统计执行器
                 STATS_EXECUTOR.shutdown();
                 if (!STATS_EXECUTOR.awaitTermination(5, TimeUnit.SECONDS)) {
                     STATS_EXECUTOR.shutdownNow();
                 }
             } catch (InterruptedException e) {
-                EXECUTOR.shutdownNow();
                 STATS_EXECUTOR.shutdownNow();
                 Thread.currentThread().interrupt();
             }
@@ -265,6 +266,15 @@ public class RequestManPanel extends JPanel {
      * 自定义接口认证面板
      */
     private AuthPanel customAuthPanel;
+
+    /**
+     * 自定义接口cookies面板
+     */
+    private HeadersPanel customHeadersPanel;
+    /**
+     * 自定义接口cookies面板
+     */
+    private CookiesPanel customCookiesPanel;
     /**
      * 顶部接口搜索按钮
      */
@@ -275,8 +285,79 @@ public class RequestManPanel extends JPanel {
      */
     private EnvironmentSelector environmentSelector;
 
+    /**
+     * 自动保存管理器
+     */
+    private AutoSaveManager autoSaveManager;
+
+    /**
+     * 接口名称标签（用于显示未保存标识）
+     */
+    private JLabel customNameLabel;
+    /**
+     * 自定义接口名称星号标签（显示未保存标识，位于输入框右侧）
+     */
+    private JLabel customNameStarLabel;
+    /**
+     * 自定义接口名称标签基础与星号文本
+     */
+    private static final String CUSTOM_NAME_LABEL_TEXT = RequestManBundle.message("custom.name.label") + ":";
+    private static final String CUSTOM_NAME_LABEL_TEXT_WITH_STAR_HTML = "<html>" + RequestManBundle.message("custom.name.label") + ": <font color='red'>*</font></html>";
+
+    /**
+     * 当前编辑的扫描接口信息
+     */
+    private ApiInfo currentScanningApi;
+
+    /**
+     * 扫描模式保存按钮
+     */
+    private JButton scanSaveButton;
+
+    /**
+     * 刷新标志，防止刷新过程中的重复调用
+     */
+    private boolean isRefreshing = false;
+
+    /**
+     * 当前选中的Tab索引，用于精确停止表格编辑
+     */
+    private int currentTabIndex = 0;
+
+
     // 静态实例管理，用于通知刷新
     private static final Map<Project, RequestManPanel> instances = new HashMap<>();
+
+    /**
+     * 扫描态基线缓存：key=StorageUtil.safeFileName(StorageUtil.buildApiKey(apiInfo, project))
+     * 仅保存首次展示时的深拷贝，用于“还原”。
+     */
+    private final Map<String, ApiInfo> baselineByKey = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 显式清理基线缓存（项目关闭或刷新列表时调用）。
+     */
+    public void clearBaselines() {
+        baselineByKey.clear();
+    }
+
+    /**
+     * 是否处于批量初始化状态，防止监听器误触发
+     */
+    private boolean isInitializing = false;
+
+    /**
+     * Tab索引常量，用于精确停止表格编辑
+     */
+    private static final class TabIndex {
+        public static final int PARAMS = 0;      // 参数
+        public static final int BODY = 1;        // 请求体
+        public static final int HEADERS = 2;     // 请求头
+        public static final int COOKIES = 3;     // Cookie
+        public static final int AUTH = 4;        // 认证
+        public static final int PRE_OP = 5;      // 前置操作
+        public static final int POST_OP = 6;     // 后置操作
+    }
 
     /**
      * RequestManPanel构造函数
@@ -289,20 +370,41 @@ public class RequestManPanel extends JPanel {
         setLayout(new BorderLayout());
         // 设置默认首选宽度和高度，优化插件初始显示宽度
         setPreferredSize(new Dimension(800, 600));
+
+        // 初始化自动保存管理器
+        autoSaveManager = new AutoSaveManager(project);
+        // 初始化列表变更持久化防抖
+        persistDebounce = new Timer(300, e -> CustomApiStorage.persistCustomApiList(project, customApiListModel));
+        persistDebounce.setRepeats(false);
+        autoSaveManager.setSaveCallback(this::autoSaveCustomApi);
+        autoSaveManager.setScanSaveCallback(this::autoSaveScanningApi);
+        autoSaveManager.setUiUpdateCallback(this::updateUIState);
+        autoSaveManager.setLocalCacheSupplier(() -> {
+            if (currentScanningApi != null) {
+                return ApiCacheStorage.loadCustomEdit(currentScanningApi, project);
+            }
+            return null;
+        });
+        autoSaveManager.setUrlUpdateCallback(() -> {
+            if (customMode && customParamsPanel != null) {
+                updateUrlFromPathParams();
+            }
+        });
+
         // 顶部区域：模式选择 + 按钮 + 接口下拉框
         JPanel topPanel = buildTopPanel();
         // 详情区
-        detailPanel.setBorder(BorderFactory.createTitledBorder("接口详情"));
+        updateDetailPanelTitle();
         // 响应折叠面板
-        responsePanel = new ResponseCollapsePanel("返回响应");
-        responsePanel.setResponseText("点击'发送'按钮获取返回结果");
+        responsePanel = new ResponseCollapsePanel(RequestManBundle.message("main.response.title"));
+        responsePanel.setResponseText(RequestManBundle.message("main.response.placeholder"));
         // 主布局：顶部为topPanel，下方为详情区+响应区
         add(topPanel, BorderLayout.NORTH);
         add(detailPanel, BorderLayout.CENTER);
         add(responsePanel, BorderLayout.SOUTH);
 
         // 初始化按钮状态
-        refreshButton.setToolTipText("刷新接口");
+        refreshButton.setToolTipText(RequestManBundle.message("main.refresh.tooltip"));
 
         // 初始化加载接口
         refreshApiList();
@@ -317,48 +419,52 @@ public class RequestManPanel extends JPanel {
      * @return 顶部面板
      */
     private JPanel buildTopPanel() {
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.X_AXIS));
-        // 接口搜索按钮，放在模式切换按钮前
-        apiSearchButton = new JButton(AllIcons.Actions.Find);
-        apiSearchButton.setToolTipText("接口搜索");
-        apiSearchButton.setPreferredSize(new Dimension(36, 36));
-        apiSearchButton.setMaximumSize(new Dimension(36, 36));
-        apiSearchButton.setFocusPainted(false);
-        apiSearchButton.setBorderPainted(true);
-        // 事件：弹出接口搜索弹窗
-        apiSearchButton.addActionListener(e -> {
-            ApiSearchPopup popup = new ApiSearchPopup(project);
-            popup.show();
-        });
-        // 先加搜索按钮
-        panel.add(apiSearchButton);
-        panel.add(Box.createHorizontalStrut(8));
+        // 构建并初始化控件（保持原有行为与事件）
+        JButton searchBtn = new JButton(AllIcons.Actions.Find);
+        searchBtn.setToolTipText(RequestManBundle.message("main.search.tooltip"));
+        searchBtn.setPreferredSize(new Dimension(36, 36));
+        searchBtn.setMaximumSize(new Dimension(36, 36));
+        searchBtn.setFocusPainted(false);
+        searchBtn.setBorderPainted(true);
+        searchBtn.addActionListener(e -> new ApiSearchPopup(project).show());
+        this.apiSearchButton = searchBtn;
 
-        // 模式切换按钮
-        modeSwitchBtn = new JButton("切换模式");
-        modeSwitchBtn.setFocusPainted(false);
-        modeSwitchBtn.setBorderPainted(true);
-        modeSwitchBtn.setPreferredSize(new Dimension(36, 36));
-        modeSwitchBtn.setMaximumSize(new Dimension(36, 36));
+        JButton modeBtn = new JButton(RequestManBundle.message("main.mode.switch"));
+        modeBtn.setFocusPainted(false);
+        modeBtn.setBorderPainted(true);
+        modeBtn.setPreferredSize(new Dimension(36, 36));
+        modeBtn.setMaximumSize(new Dimension(36, 36));
+        this.modeSwitchBtn = modeBtn;
         updateModeSwitchBtn();
-        modeSwitchBtn.addActionListener(e -> {
-            customMode = !customMode;
-            if (customMode) {
+        modeBtn.addActionListener(e -> {
+            if (autoSaveManager != null) {
+                autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+            } else {
+                stopTableEditingForTabIndex(currentTabIndex);
+            }
+            if (!customMode) {
                 refreshButton.setIcon(AllIcons.General.Add);
-                refreshButton.setToolTipText("新增接口");
+                refreshButton.setToolTipText(RequestManBundle.message("main.add.tooltip"));
                 switchToCustomMode();
             } else {
                 refreshButton.setIcon(AllIcons.Actions.Refresh);
-                refreshButton.setToolTipText("刷新接口");
+                refreshButton.setToolTipText(RequestManBundle.message("main.refresh.tooltip"));
                 switchToScanMode();
             }
             updateModeSwitchBtn();
         });
-        // 使用标志位避免重复注册，性能更优
+
         if (refreshButton.getActionListeners().length == 0) {
             refreshButton.addActionListener(e -> {
                 if (customMode) {
+                    if (autoSaveManager != null) {
+                        autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+                    } else {
+                        stopTableEditingForTabIndex(currentTabIndex);
+                    }
+                    if (!checkUnsavedChanges()) {
+                        return;
+                    }
                     customApiList.clearSelection();
                     showCustomApiDetail(null);
                 } else {
@@ -366,26 +472,30 @@ public class RequestManPanel extends JPanel {
                 }
             });
         }
-        apiComboBox.addActionListener(e -> {
-            ApiInfo selected = (ApiInfo) apiComboBox.getSelectedItem();
-            showApiDetail(selected);
-        });
-        panel.add(modeSwitchBtn);
-        panel.add(Box.createHorizontalStrut(8));
-        // 刷新/新增按钮
-        refreshButton.setPreferredSize(new Dimension(36, 36));
-        refreshButton.setMaximumSize(new Dimension(36, 36));
-        refreshButton.setFocusPainted(false);
-        refreshButton.setBorderPainted(true);
-        panel.add(refreshButton);
-        panel.add(Box.createHorizontalStrut(8));
-        // 下拉框和定位按钮并排
-        JPanel comboPanel = new JPanel();
-        comboPanel.setLayout(new BoxLayout(comboPanel, BoxLayout.X_AXIS));
-        comboPanel.add(apiComboBox);
-        // 靶心定位按钮
+        if (apiComboBox.getActionListeners().length == 0) {
+            apiComboBox.addActionListener(e -> {
+                if (isRefreshing) {
+                    return;
+                }
+                if (!checkUnsavedChanges()) {
+                    if (currentScanningApi != null) {
+                        for (int i = 0; i < apiComboBox.getItemCount(); i++) {
+                            ApiInfo api = apiComboBox.getItemAt(i);
+                            if (api.equals(currentScanningApi)) {
+                                apiComboBox.setSelectedIndex(i);
+                                break;
+                            }
+                        }
+                    }
+                    return;
+                }
+                ApiInfo selected = (ApiInfo) apiComboBox.getSelectedItem();
+                showApiDetail(selected);
+            });
+        }
+
         JButton locateButton = new JButton(AllIcons.General.Locate);
-        locateButton.setToolTipText("定位到当前光标方法的接口");
+        locateButton.setToolTipText(RequestManBundle.message("main.locate.tooltip"));
         locateButton.setPreferredSize(new Dimension(32, 32));
         locateButton.setMaximumSize(new Dimension(32, 32));
         locateButton.setFocusPainted(false);
@@ -406,33 +516,35 @@ public class RequestManPanel extends JPanel {
                     return;
                 }
             }
-            JOptionPane.showMessageDialog(this, "未找到对应接口", "提示", JOptionPane.INFORMATION_MESSAGE);
+            JOptionPane.showMessageDialog(this, RequestManBundle.message("main.locate.not.found"), RequestManBundle.message("main.tip"), JOptionPane.INFORMATION_MESSAGE);
         });
-        comboPanel.add(Box.createHorizontalStrut(4));
-        comboPanel.add(locateButton);
-        comboPanel.setMaximumSize(new Dimension(600, 36));
-        panel.add(comboPanel);
 
-        // 环境选择器
-        panel.add(Box.createHorizontalStrut(8));
-        environmentSelector = new EnvironmentSelector(project);
-        panel.add(environmentSelector);
+        if (environmentSelector == null) {
+            environmentSelector = new EnvironmentSelector(project);
+        }
 
-        // 根据设置决定是否显示性能监控按钮
+        JButton performanceButton = null;
         boolean performanceMonitoringEnabled = PropertiesComponent.getInstance().getBoolean("requestman.performanceMonitoring", false);
         if (performanceMonitoringEnabled) {
-            panel.add(Box.createHorizontalStrut(8));
-            JButton performanceButton = new JButton("📊");
-            performanceButton.setToolTipText("性能监控");
+            performanceButton = new JButton("📊");
+            performanceButton.setToolTipText(RequestManBundle.message("main.performance.tooltip"));
             performanceButton.setPreferredSize(new Dimension(36, 36));
             performanceButton.setMaximumSize(new Dimension(36, 36));
             performanceButton.setFocusPainted(false);
             performanceButton.setBorderPainted(true);
             performanceButton.addActionListener(e -> showPerformanceReport());
-            panel.add(performanceButton);
         }
 
-        return panel;
+        TopPanelBuilder.TopPanelContext ctx = new TopPanelBuilder.TopPanelContext();
+        ctx.apiSearchButton = searchBtn;
+        ctx.modeSwitchButton = modeBtn;
+        ctx.refreshOrAddButton = refreshButton;
+        ctx.apiComboBox = apiComboBox;
+        ctx.locateButton = locateButton;
+        ctx.environmentSelector = environmentSelector;
+        ctx.performanceButton = performanceButton;
+
+        return TopPanelBuilder.buildTopPanel(ctx);
     }
 
     /**
@@ -444,21 +556,37 @@ public class RequestManPanel extends JPanel {
         }
         if (customMode) {
             modeSwitchBtn.setText("\u270E");
-            modeSwitchBtn.setToolTipText("切换到自动扫描模式");
+            modeSwitchBtn.setToolTipText(RequestManBundle.message("main.mode.to.scan"));
         } else {
             modeSwitchBtn.setText("\uD83D\uDCE1");
-            modeSwitchBtn.setToolTipText("切换到自定义接口模式");
+            modeSwitchBtn.setToolTipText(RequestManBundle.message("main.mode.to.custom"));
         }
     }
 
     /**
      * 刷新接口下拉框。
-     * 1. 调用ApiInfoExtractor获取接口信息（后台线程）
-     * 2. 填充下拉框模型（UI线程）
-     * 3. 处理异常和空数据
+     * 1. 检查是否有未保存的更改
+     * 2. 调用ApiInfoExtractor获取接口信息（后台线程）
+     * 3. 填充下拉框模型（UI线程）
+     * 4. 处理异常和空数据
      */
     private void refreshApiList() {
+        baselineByKey.clear();
+        // 刷新前，仅停止当前选中Tab的表格编辑，并以"立即更新"模式确保未保存状态同步
+        if (autoSaveManager != null) {
+            autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+        } else {
+            stopTableEditingForTabIndex(currentTabIndex);
+        }
+
+        // 检查是否有未保存的更改，如果有则提示用户
+        if (!checkUnsavedChanges()) {
+            return; // 用户取消，停止刷新流程
+        }
+        // 设置刷新标志，防止ActionListener触发
+        isRefreshing = true;
         apiComboBoxModel.removeAllElements();
+        isRefreshing = false;
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             List<ApiInfo> apis;
             try {
@@ -477,13 +605,16 @@ public class RequestManPanel extends JPanel {
             }
             List<ApiInfo> finalApis = apis;
             ApplicationManager.getApplication().invokeLater(() -> {
+                // 设置刷新标志，防止ActionListener触发
+                isRefreshing = true;
                 if (finalApis == null || finalApis.isEmpty()) {
-                    apiComboBoxModel.addElement(new ApiInfo("未检测到接口方法", "", "", "", ""));
+                    apiComboBoxModel.addElement(new ApiInfo(RequestManBundle.message("main.no.api.detected"), "", "", "", ""));
                 } else {
                     for (ApiInfo api : finalApis) {
                         apiComboBoxModel.addElement(api);
                     }
                 }
+                isRefreshing = false;
                 if (apiComboBoxModel.getSize() > 0) {
                     apiComboBox.setSelectedIndex(0);
                 }
@@ -497,23 +628,174 @@ public class RequestManPanel extends JPanel {
      * @param apiInfo 选中的接口信息
      */
     private void showApiDetail(ApiInfo apiInfo) {
+        // 在加载缓存前，缓存基线（仅首次）
+        try {
+            String key = StorageUtil.safeFileName(StorageUtil.buildApiKey(apiInfo, project));
+            baselineByKey.putIfAbsent(key, deepCopyApiInfo(apiInfo));
+        } catch (Exception ignore) {
+        }
+
+        // 检查是否有未保存的更改，并且不是同一个接口
+        if (!checkUnsavedChanges()) {
+            return;
+        }
+        // 加载本地缓存
+        apiInfo = ApiCacheStorage.loadCustomEdit(apiInfo, project);
+        // 延迟清理旧的JsonBodyStructurePanel，避免过早清理导致的问题
+        // 先构建新的面板，再清理旧的，确保平滑切换
+        JLayeredPane layeredPane = new JLayeredPane();
+        // 使用绝对布局，精确控制按钮层位置
+        layeredPane.setLayout(null);
+
+        JTabbedPane mainTab = buildMainTab(apiInfo);
+        layeredPane.add(mainTab, JLayeredPane.DEFAULT_LAYER);
+        // 创建还原按钮面板
+        JPanel restoreButtonPanel = createRestoreButtonPanel(mainTab);
+        layeredPane.add(restoreButtonPanel, JLayeredPane.PALETTE_LAYER);
+        Runnable placeButton = () -> updateRestoreButtonBounds(mainTab, restoreButtonPanel, layeredPane);
+        // 统一的尺寸监听，减少监听器数量，避免不必要的回调
+        java.awt.event.ComponentAdapter resizeListener = new java.awt.event.ComponentAdapter() {
+            @Override
+            public void componentResized(java.awt.event.ComponentEvent e) {
+                mainTab.setBounds(0, 0, layeredPane.getWidth(), layeredPane.getHeight());
+                SwingUtilities.invokeLater(placeButton);
+            }
+        };
+        layeredPane.addComponentListener(resizeListener);
+        // 首次放置
+        SwingUtilities.invokeLater(() -> {
+            mainTab.setBounds(0, 0, layeredPane.getWidth(), layeredPane.getHeight());
+            placeButton.run();
+        });
+        // Tab变化时也更新
+        mainTab.addChangeListener(e -> SwingUtilities.invokeLater(placeButton));
+        // 在替换面板之前清理旧的
+        cleanupOldStructurePanels();
+
         detailPanel.removeAll();
         // 清空响应面板内容，避免JSONPath提取器使用上一个接口的响应内容
         if (responsePanel != null) {
-            responsePanel.setResponseText("点击'发送'按钮获取返回结果");
+            responsePanel.setResponseText(RequestManBundle.message("main.response.placeholder"));
             responsePanel.setStatusText("");
             responsePanel.collapse();
         }
         if (apiInfo == null) {
-            detailPanel.add(new JLabel("未选择接口"), BorderLayout.CENTER);
+            detailPanel.add(new JLabel(RequestManBundle.message("main.no.api.selected")), BorderLayout.CENTER);
             detailPanel.revalidate();
             detailPanel.repaint();
             return;
         }
-        JTabbedPane mainTab = buildMainTab(apiInfo);
-        detailPanel.add(mainTab, BorderLayout.CENTER);
+
+        // 设置当前扫描接口
+        currentScanningApi = apiInfo;
+        if (autoSaveManager != null) {
+            autoSaveManager.setCurrentScanningApi(apiInfo);
+        }
+        // 回显headers
+        if (headersPanel != null && apiInfo.getHeaders() != null) {
+            isInitializing = true;
+            headersPanel.setHeadersData(apiInfo.getHeaders());
+            isInitializing = false;
+        }
+
+        detailPanel.add(layeredPane, BorderLayout.CENTER);
         detailPanel.revalidate();
         detailPanel.repaint();
+
+        // 设置自动保存监听器
+        setupScanningAutoSaveListeners();
+        // 展示接口详情后，刷新保存按钮状态
+        updateSaveButtonState();
+    }
+
+    /**
+     * 清理旧的JsonBodyStructurePanel，避免内存泄漏
+     */
+    private void cleanupOldStructurePanels() {
+        // 使用更高效的方式清理，避免不必要的递归遍历
+        if (detailPanel != null) {
+            cleanupStructurePanelsEfficiently(detailPanel);
+        }
+    }
+
+    /**
+     * 高效清理面板中的JsonBodyStructurePanel，避免性能问题
+     */
+    private void cleanupStructurePanelsEfficiently(Container container) {
+        if (container == null) return;
+
+        // 使用WeakHashMap避免强引用，让GC自动清理
+        Map<Container, Boolean> visited = new WeakHashMap<>();
+        cleanupStructurePanelsWithWeakTracking(container, visited);
+
+        // 主动触发GC清理
+        System.gc();
+    }
+
+    /**
+     * 使用WeakHashMap的清理方法，避免内存泄漏
+     */
+    private void cleanupStructurePanelsWithWeakTracking(Container container, Map<Container, Boolean> visited) {
+        if (container == null || visited.containsKey(container)) {
+            return; // 防止循环引用
+        }
+
+        // 标记当前容器已访问
+        visited.put(container, Boolean.TRUE);
+
+        try {
+            // 优先检查当前容器，避免不必要的递归
+            if (container instanceof JPanel) {
+                JPanel panel = (JPanel) container;
+                Object structurePanel = panel.getClientProperty("structurePanel");
+                if (structurePanel instanceof JsonBodyStructurePanel) {
+                    try {
+                        ((JsonBodyStructurePanel) structurePanel).cleanup();
+                    } catch (Exception e) {
+                        // 使用日志框架记录异常
+                        LogUtil.error("清理JsonBodyStructurePanel时发生异常: " + e.getMessage());
+                    }
+                    // 移除引用
+                    panel.putClientProperty("structurePanel", null);
+                }
+            }
+
+            // 只对必要的容器类型进行递归，减少遍历开销
+            if (container instanceof JTabbedPane) {
+                JTabbedPane tabbedPane = (JTabbedPane) container;
+                int tabCount = tabbedPane.getTabCount();
+                for (int i = 0; i < tabCount; i++) {
+                    Component tabComponent = tabbedPane.getComponentAt(i);
+                    if (tabComponent instanceof Container && !visited.containsKey(tabComponent)) {
+                        cleanupStructurePanelsWithWeakTracking((Container) tabComponent, visited);
+                    }
+                }
+            } else if (container instanceof JSplitPane) {
+                // 只处理JSplitPane的左右面板
+                JSplitPane splitPane = (JSplitPane) container;
+                if (splitPane.getLeftComponent() instanceof Container && !visited.containsKey(splitPane.getLeftComponent())) {
+                    cleanupStructurePanelsWithWeakTracking((Container) splitPane.getLeftComponent(), visited);
+                }
+                if (splitPane.getRightComponent() instanceof Container && !visited.containsKey(splitPane.getRightComponent())) {
+                    cleanupStructurePanelsWithWeakTracking((Container) splitPane.getRightComponent(), visited);
+                }
+            } else {
+                // 对于其他容器，只检查直接子组件，避免深度递归
+                Component[] components = container.getComponents();
+                for (Component component : components) {
+                    if (component instanceof Container && !visited.containsKey(component)) {
+                        // 限制递归深度，避免性能问题
+                        if (visited.size() < 100) { // 设置合理的递归深度限制
+                            cleanupStructurePanelsWithWeakTracking((Container) component, visited);
+                        }
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            // 记录异常但不中断清理过程
+            LogUtil.error("清理组件时发生异常: " + e.getMessage());
+        }
     }
 
     /**
@@ -524,11 +806,235 @@ public class RequestManPanel extends JPanel {
      */
     private JTabbedPane buildMainTab(ApiInfo apiInfo) {
         JTabbedPane mainTab = new JTabbedPane();
-        mainTab.addTab("请求", buildRequestPanel(apiInfo));
-        mainTab.addTab("响应定义", buildResponsePanel(apiInfo));
-        mainTab.addTab("接口说明", buildDocPanel(apiInfo));
-        mainTab.addTab("预览文档", buildPreviewPanel(apiInfo));
+        mainTab.addTab(RequestManBundle.message("tab.request"), buildRequestPanel(apiInfo));
+        mainTab.addTab(RequestManBundle.message("tab.responseDef"), buildResponsePanel(apiInfo));
+        mainTab.addTab(RequestManBundle.message("tab.doc"), buildDocPanel(apiInfo));
+        mainTab.addTab(RequestManBundle.message("tab.preview"), buildPreviewPanel(apiInfo));
+//
+//        // 在Tab右侧添加还原按钮
+//        addRestoreButtonToMainTab(mainTab);
+
         return mainTab;
+    }
+
+
+    /**
+     * 创建还原按钮面板
+     *
+     * @return 还原按钮面板
+     */
+    private JPanel createRestoreButtonPanel(JTabbedPane mainTab) {
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0)) {
+            @Override
+            public boolean contains(int x, int y) {
+                // 只在按钮区域内返回 true，其余地方让事件透传给 mainTab
+                for (Component comp : getComponents()) {
+                    Point p = SwingUtilities.convertPoint(this, x, y, comp);
+                    if (comp.contains(p)) {
+                        return true; // 在按钮区域，拦截
+                    }
+                }
+                return false; // 其他区域透传
+            }
+        };
+
+        // 叠加容器由绝对布局放置，本层仅需透明
+        buttonPanel.setOpaque(false);
+        buttonPanel.setBorder(null);
+
+        // 创建还原按钮
+        JButton restoreButton = new JButton(
+                com.intellij.openapi.util.IconLoader.getIcon("/icons/rollback.svg", RequestManPanel.class)
+        );
+        restoreButton.setToolTipText(RequestManBundle.message("restore.tooltip"));
+        restoreButton.setPreferredSize(new Dimension(30, 30));
+        restoreButton.setFocusPainted(false);
+        restoreButton.setBorderPainted(true);
+        restoreButton.setDefaultCapable(false);              // 禁止成为默认按钮
+
+        restoreButton.addActionListener(e -> {
+            SwingUtilities.invokeLater(() -> {
+                // 把焦点给 tab（或任意父容器）
+                if (mainTab.isShowing()) {
+                    mainTab.requestFocusInWindow();
+                }
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().clearGlobalFocusOwner();
+            });
+            restoreScanningApiToOriginal();
+        });
+
+        buttonPanel.add(restoreButton);
+        return buttonPanel;
+    }
+
+    /**
+     * 将覆盖在顶部的按钮面板放置到 Tab 标题行的右上角。
+     * 绝对定位，避免 OverlayLayout 的居中行为。
+     */
+    private void updateRestoreButtonBounds(JTabbedPane mainTab, JPanel buttonPanel, JLayeredPane layeredPane) {
+        if (mainTab == null || buttonPanel == null || layeredPane == null) {
+            return;
+        }
+
+        // 期望的按钮尺寸
+        Dimension pref = buttonPanel.getPreferredSize();
+        if (pref == null) {
+            pref = new Dimension(32, 24);
+        }
+        int buttonWidth = Math.max(24, pref.width);
+        int buttonHeight = Math.max(20, pref.height);
+
+        // 读取第一个 Tab 的区域，获取标题栏的 y 和高度
+        Rectangle firstTabBounds = null;
+        try {
+            if (mainTab.getTabCount() > 0) {
+                firstTabBounds = mainTab.getUI().getTabBounds(mainTab, 0);
+            }
+        } catch (Exception ignored) {
+        }
+
+        int headerY = 0;
+        int headerH;
+        if (firstTabBounds != null) {
+            headerY = firstTabBounds.y;
+            headerH = firstTabBounds.height;
+        } else {
+            headerH = Math.max(24, mainTab.getFontMetrics(mainTab.getFont()).getHeight() + 12);
+        }
+
+        // 右侧 12px 内边距
+        int rightPadding = 12;
+        int x = Math.max(0, layeredPane.getWidth() - buttonWidth - rightPadding);
+
+        // 垂直居中到标题栏
+        int y = headerY + Math.max(0, (headerH - buttonHeight) / 2);
+
+        buttonPanel.setBounds(x, y, buttonWidth, headerH);
+        buttonPanel.revalidate();
+        buttonPanel.repaint();
+    }
+
+    /**
+     * 深拷贝 ApiInfo（仅数据结构复制，不含任何解析/扫描行为）。
+     */
+    private static ApiInfo deepCopyApiInfo(ApiInfo src) {
+        if (src == null) {
+            return null;
+        }
+        java.util.List<ApiParam> params = cloneParams(src.getParams());
+        java.util.List<ApiParam> bodyParams = cloneParams(src.getBodyParams());
+        java.util.List<String> paramTypes = src.getParamTypes() == null ? java.util.Collections.emptyList() : new java.util.ArrayList<>(src.getParamTypes());
+        java.util.List<ApiParam> responseParams = cloneParams(src.getResponseParams());
+
+        ApiInfo copy = new ApiInfo(
+                src.getName(), src.getMethodName(), src.getUrl(), src.getHttpMethod(),
+                params, bodyParams, paramTypes, src.getDescription(), responseParams, src.getClassName()
+        );
+        // 直拷字段/列表
+        copy.setHeaders(src.getHeaders() == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(src.getHeaders()));
+        copy.setCookieItems(src.getCookieItems() == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(src.getCookieItems()));
+        copy.setAuthMode(src.getAuthMode());
+        copy.setAuthValue(src.getAuthValue());
+        copy.setPostOps(src.getPostOps() == null ? new java.util.ArrayList<>() : new java.util.ArrayList<>(src.getPostOps()));
+        copy.setBodyType(src.getBodyType());
+        copy.setBody(src.getBody());
+        return copy;
+    }
+
+    private static java.util.List<ApiParam> cloneParams(java.util.List<ApiParam> list) {
+        if (list == null || list.isEmpty()) {
+            return new java.util.ArrayList<>();
+        }
+        java.util.List<ApiParam> out = new java.util.ArrayList<>(list.size());
+        for (ApiParam p : list) {
+            ApiParam c = new ApiParam();
+            c.setName(p.getName());
+            c.setType(p.getType());
+            c.setDescription(p.getDescription());
+            c.setDataType(p.getDataType());
+            c.setRawType(p.getRawType());
+            c.setRawCanonicalType(p.getRawCanonicalType());
+            c.setValue(p.getValue());
+            c.setContentType(p.getContentType());
+            c.setRecursive(p.isRecursive());
+            c.setChildren(cloneParams(p.getChildren()));
+            out.add(c);
+        }
+        return out;
+    }
+
+    /**
+     * 还原扫描接口到原始状态
+     */
+    private void restoreScanningApiToOriginal() {
+        if (currentScanningApi == null) {
+            return;
+        }
+
+        // 显示确认对话框
+        int result = JOptionPane.showConfirmDialog(
+                this,
+                RequestManBundle.message("restore.confirm.message"),
+                RequestManBundle.message("restore.confirm.title"),
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+
+        if (result != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        try {
+            // 停止所有表格编辑
+            if (autoSaveManager != null) {
+                autoSaveManager.runWithImmediateTableUpdate(() -> stopAllTableEditing());
+            } else {
+                stopAllTableEditing();
+            }
+
+            // 清除本地缓存
+            ApiCacheStorage.clearCustomEdit(currentScanningApi, project);
+
+            // 基于首次扫描基线还原
+            String key = StorageUtil.safeFileName(StorageUtil.buildApiKey(currentScanningApi, project));
+            ApiInfo baseline = baselineByKey.get(key);
+            ApiInfo originalApi;
+            if (baseline != null) {
+                originalApi = deepCopyApiInfo(baseline);
+            } else {
+                // 兜底：使用当前对象的拷贝
+                originalApi = new ApiInfo(currentScanningApi);
+            }
+            // 重新构建界面已在上面处理
+
+            // 标记为已保存状态
+            if (autoSaveManager != null) {
+                autoSaveManager.markAsSaved();
+                autoSaveManager.setCurrentScanningApi(originalApi); // 关键：让后续编辑仍绑定到当前扫描接口
+            }
+            showApiDetail(originalApi);
+            // 更新UI状态
+            updateUIState();
+
+            // 显示成功提示
+            SwingUtilities.invokeLater(() -> {
+                JOptionPane.showMessageDialog(
+                        this,
+                        RequestManBundle.message("restore.done.message"),
+                        RequestManBundle.message("restore.done.title"),
+                        JOptionPane.INFORMATION_MESSAGE
+                );
+            });
+
+        } catch (Exception ex) {
+            LogUtil.error("还原接口数据时发生错误: " + ex.getMessage(), ex);
+            JOptionPane.showMessageDialog(
+                    this,
+                    RequestManBundle.message("restore.fail.message") + ex.getMessage(),
+                    RequestManBundle.message("restore.fail.title"),
+                    JOptionPane.ERROR_MESSAGE
+            );
+        }
     }
 
     /**
@@ -553,8 +1059,6 @@ public class RequestManPanel extends JPanel {
      * @return 请求行面板
      */
     private JPanel buildRequestLine(ApiInfo apiInfo) {
-        JPanel requestLine = new JPanel();
-        requestLine.setLayout(new BoxLayout(requestLine, BoxLayout.X_AXIS));
         JLabel methodLabel = new JLabel(apiInfo.getHttpMethod());
         methodLabel.setForeground(new java.awt.Color(220, 53, 69));
         JTextField urlField = new JTextField(apiInfo.getUrl());
@@ -564,13 +1068,21 @@ public class RequestManPanel extends JPanel {
                 btn -> doSendScanRequest(btn, apiInfo),
                 btn -> doSendAndDownloadScan(btn, apiInfo)
         );
-        JButton saveButton = new JButton("保存");
-        saveButton.addActionListener(e -> saveCustomEdit(apiInfo));
-        requestLine.add(methodLabel);
-        requestLine.add(urlField);
-        requestLine.add(splitSendPanel);
-        requestLine.add(saveButton);
-        return requestLine;
+        scanSaveButton = new JButton(RequestManBundle.message("common.save"));
+        scanSaveButton.addActionListener(e -> {
+            // 保存前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
+            stopAllTableEditing();
+            ApiCacheStorage.saveCustomEdit(apiInfo, project, this, autoSaveManager);
+            autoSaveManager.markAsSaved();
+            updateUIState();
+        });
+
+        RequestPanelsBuilder.RequestLineComponents c = new RequestPanelsBuilder.RequestLineComponents();
+        c.methodLabel = methodLabel;
+        c.urlField = urlField;
+        c.splitSendPanel = splitSendPanel;
+        c.scanSaveButton = scanSaveButton;
+        return RequestPanelsBuilder.assembleRequestLine(c);
     }
 
     /**
@@ -580,98 +1092,55 @@ public class RequestManPanel extends JPanel {
      * @return 参数Tab
      */
     private JTabbedPane buildParamTab(ApiInfo apiInfo) {
-        JTabbedPane paramTab = new JTabbedPane();
         // Params 持久化支持
-        paramsPanel = new ParamsPanel(apiInfo.getParams());
-        paramTab.addTab("Params", paramsPanel);
+        paramsPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.PARAMS, apiInfo.getParams(), true);
         // Body 持久化支持
-        bodyPanel = new BodyPanel(apiInfo.getBodyParams());
-        paramTab.addTab("Body", bodyPanel);
+        bodyPanel = new BodyPanel(apiInfo);
         // Headers 持久化支持
         headersPanel = new HeadersPanel();
+        headersPanel.setHeadersData(apiInfo.getHeaders());
         // Cookies 持久化支持
         cookiesPanel = new CookiesPanel();
+        cookiesPanel.setCookiesData(apiInfo.getCookieItems());
         // Auth 持久化支持
         authPanel = new AuthPanel();
+        authPanel.setAuthMode(apiInfo.getAuthMode());
+        authPanel.setAuthValue(apiInfo.getAuthValue());
+        // preOp 持久化支持
+        preOpPanel = new PreOpPanel();
         // PostOp 持久化支持
         postOpPanel = new PostOpPanel();
-        // 加载本地缓存
-        Map<String, Object> cache = loadCustomEdit(apiInfo);
-        if (cache != null) {
-            // 恢复 params
-            if (cache.get("params") instanceof List<?> list) {
-                List<String> paramValues = new ArrayList<>();
-                for (Object obj : list) {
-                    paramValues.add(obj != null ? obj.toString() : "");
-                }
-                paramsPanel.setParamsValueList(paramValues);
-            }
-            // 恢复 body（仅json类型）
-            if (cache.get("bodyJson") instanceof String json) {
-                bodyPanel.setJsonBodyText(json);
-            }
-            // 恢复 headers
-            if (cache.get("headers") instanceof List<?> list) {
-                List<HeadersPanel.HeaderItem> headerItems = new ArrayList<>();
-                for (Object obj : list) {
-                    if (obj instanceof HeadersPanel.HeaderItem) {
-                        headerItems.add((HeadersPanel.HeaderItem) obj);
-                    } else if (obj instanceof Map map) {
-                        String name = (String) map.get("name");
-                        String value = (String) map.get("value");
-                        String type = (String) map.get("type");
-                        String desc = (String) map.get("desc");
-                        headerItems.add(new HeadersPanel.HeaderItem(name, value, type, desc));
-                    }
-                }
-                headersPanel.setHeadersData(headerItems);
-            }
-            // 恢复 cookies
-            if (cache.get("cookies") instanceof List<?> list) {
-                List<CookiesPanel.CookieItem> cookieItems = new ArrayList<>();
-                for (Object obj : list) {
-                    if (obj instanceof CookiesPanel.CookieItem) {
-                        cookieItems.add((CookiesPanel.CookieItem) obj);
-                    } else if (obj instanceof Map map) {
-                        String name = (String) map.get("name");
-                        String value = (String) map.get("value");
-                        String type = (String) map.get("type");
-                        cookieItems.add(new CookiesPanel.CookieItem(name, value, type));
-                    }
-                }
-                cookiesPanel.setCookiesData(cookieItems);
-            }
-            // 恢复 auth
-            if (cache.get("auth") instanceof String authValue) {
-                authPanel.setAuthValue(authValue);
-            }
-            // 恢复 postOp
-            if (cache.get("postOp") instanceof List<?> list) {
-                List<PostOpPanel.PostOpItem> postOpItems = new ArrayList<>();
-                for (Object obj : list) {
-                    if (obj instanceof PostOpPanel.PostOpItem) {
-                        postOpItems.add((PostOpPanel.PostOpItem) obj);
-                    } else if (obj instanceof Map map) {
-                        String name = (String) map.get("name");
-                        String type = (String) map.get("type");
-                        String value = (String) map.get("value");
-                        postOpItems.add(new PostOpPanel.PostOpItem(name, type, value));
-                    }
-                }
-                postOpPanel.setPostOpData(postOpItems);
-            }
-        }
-        paramTab.addTab("Headers", headersPanel);
-        paramTab.addTab("Cookies", cookiesPanel);
-        paramTab.addTab("Auth", authPanel);
-        paramTab.addTab("前置操作", new PreOpPanel());
-        paramTab.addTab("后置操作", postOpPanel);
+        postOpPanel.setPostOpData(apiInfo.getPostOps());
+        RequestPanelsBuilder.ParamTabsComponents pc = new RequestPanelsBuilder.ParamTabsComponents();
+        pc.paramsPanel = paramsPanel;
+        pc.bodyPanel = bodyPanel;
+        pc.headersPanel = headersPanel;
+        pc.cookiesPanel = cookiesPanel;
+        pc.authPanel = authPanel;
+        pc.preOpPanel = preOpPanel;
+        pc.postOpPanel = postOpPanel;
+        JTabbedPane paramTab = RequestPanelsBuilder.assembleParamTabs(pc);
 
         // 设置响应面板引用，用于JSONPath提取器
         postOpPanel.setResponsePanel(responsePanel);
         // 设置当前接口信息，用于获取响应定义
         postOpPanel.setCurrentApiInfo(apiInfo);
         paramTab.setTabLayoutPolicy(JTabbedPane.WRAP_TAB_LAYOUT);
+        // 为paramTab添加ChangeListener，在切换tab之前先停止所有表格编辑
+        paramTab.addChangeListener(e -> {
+            // 获取切换前的Tab索引
+            int previousTabIndex = currentTabIndex;
+            // 获取切换后的Tab索引
+            int newTabIndex = paramTab.getSelectedIndex();
+
+            // 更新当前Tab索引
+            currentTabIndex = newTabIndex;
+
+            // 只停止离开的Tab中的表格编辑
+            stopTableEditingForTabIndex(previousTabIndex);
+
+            LogUtil.debug("扫描模式Tab切换: " + previousTabIndex + " -> " + newTabIndex);
+        });
         return paramTab;
     }
 
@@ -682,10 +1151,7 @@ public class RequestManPanel extends JPanel {
      * @return 响应定义面板
      */
     private JPanel buildResponsePanel(ApiInfo apiInfo) {
-        JPanel responsePanel = new JPanel(new BorderLayout());
-        List<ApiParam> responseParams = apiInfo != null ? apiInfo.getResponseParams() : null;
-        responsePanel.add(new JsonBodyStructurePanel(responseParams), BorderLayout.CENTER);
-        return responsePanel;
+        return RequestViewBuilders.buildResponseDefinitionPanel(apiInfo);
     }
 
     /**
@@ -695,24 +1161,7 @@ public class RequestManPanel extends JPanel {
      * @return 接口说明面板
      */
     private JPanel buildDocPanel(ApiInfo apiInfo) {
-        JPanel docPanel = new JPanel();
-        docPanel.setLayout(new BoxLayout(docPanel, BoxLayout.Y_AXIS));
-        Border emptyBorder = BorderFactory.createEmptyBorder(20, 0, 0, 0);
-        JLabel jLabelName = new JLabel("<html>接口名称: <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + apiInfo.getName() + "</html>");
-        docPanel.add(jLabelName);
-        JLabel jLabelHttpMethod = new JLabel("<html>接口请求: <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + apiInfo.getHttpMethod() + "</html>");
-        jLabelHttpMethod.setBorder(emptyBorder);
-        docPanel.add(jLabelHttpMethod);
-        JLabel jLabelDisplayText = new JLabel("<html>接口信息: <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + apiInfo.getDisplayText() + "</html>");
-        jLabelDisplayText.setBorder(emptyBorder);
-        docPanel.add(jLabelDisplayText);
-        JLabel jLabelClassName = new JLabel("<html>接口所在类: <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + apiInfo.getClassName() + "</html>");
-        jLabelClassName.setBorder(emptyBorder);
-        docPanel.add(jLabelClassName);
-        JLabel jLabelDescription = new JLabel("<html>描述: <br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;" + apiInfo.getDescription() + "</html>");
-        jLabelDescription.setBorder(emptyBorder);
-        docPanel.add(jLabelDescription);
-        return docPanel;
+        return RequestViewBuilders.buildDocPanel(apiInfo);
     }
 
 
@@ -723,155 +1172,64 @@ public class RequestManPanel extends JPanel {
      * @return 预览文档面板
      */
     private JPanel buildPreviewPanel(ApiInfo apiInfo) {
-        List<ApiParam> pathParams = apiInfo.getParams() != null ? apiInfo.getParams().stream().filter(p -> "路径变量".equals(p.getType())).toList() : Collections.emptyList();
-        List<ApiParam> queryParams = apiInfo.getParams() != null ? apiInfo.getParams().stream().filter(p -> "请求参数".equals(p.getType())).toList() : Collections.emptyList();
-        List<ApiParam> bodyParams = apiInfo.getBodyParams();
-        ContentType contentType = ContentType.APPLICATION_JSON;
-        String responseJson = "{\n  \"code\": \"\",\n  \"message\": \"\",\n  \"data\": null\n}";
-        return new PreviewDocPanel(apiInfo, contentType, bodyParams, pathParams, queryParams, responseJson);
+        return RequestViewBuilders.buildPreviewPanel(apiInfo);
+    }
+
+
+    /**
+     * 根据Path参数更新URL
+     */
+    private void updateUrlFromPathParams() {
+        if (customParamsPanel == null || customUrlField == null) {
+            return;
+        }
+
+        List<ApiParam> params = customParamsPanel.getParams();
+        if (params.isEmpty()) {
+            return;
+        }
+
+        // 获取基础URL（不包含Path参数的部分）
+        String baseUrl = getBaseUrlWithoutPathParams();
+
+        StringBuilder urlBuilder = new StringBuilder();
+        urlBuilder.append(baseUrl);
+
+        // 重新拼接所有Path参数
+        for (ApiParam param : params) {
+            if (!"Path".equals(param.getType())) {
+                continue;
+            }
+            if (StringUtils.isAnyBlank(param.getName(), param.getValue())) {
+                continue;
+            }
+            if (param.getName() != null && !param.getName().trim().isEmpty()) {
+                urlBuilder.append("/{").append(param.getName()).append("}");
+            }
+        }
+
+        // 更新URL字段
+        customUrlField.setText(urlBuilder.toString());
     }
 
     /**
-     * 将字符串中的非法文件名字符替换为下划线，保证文件名合法（适用于 Windows 文件系统）
-     *
-     * @param name 原始字符串
-     * @return 合法文件名
+     * 获取不包含Path参数的基础URL
      */
-    private static String safeFileName(String name) {
-        // Windows 文件名非法字符: \\ / : * ? " < > | { }
-        return name.replaceAll("[\\\\/:*?\"<>|{}]", "_");
+    private String getBaseUrlWithoutPathParams() {
+        String currentUrl = customUrlField.getText();
+        if (currentUrl == null || currentUrl.isEmpty()) {
+            return "";
+        }
+
+        // 找到第一个Path参数的位置，截取前面的部分作为基础URL
+        int pathStartIndex = currentUrl.indexOf("/{");
+        if (pathStartIndex > 0) {
+            return currentUrl.substring(0, pathStartIndex);
+        }
+
+        return currentUrl;
     }
 
-    /**
-     * 保存自定义编辑内容到本地缓存
-     *
-     * @param apiInfo 当前接口信息
-     */
-    private void saveCustomEdit(ApiInfo apiInfo) {
-        // 保存前，主动结束Headers、Cookies、后置操作等表格的编辑，确保内容写入TableModel，避免数据丢失
-        if (headersPanel != null) {
-            JTable table = getTableFromHeadersPanel(headersPanel);
-            if (table != null && table.isEditing()) {
-                table.getCellEditor().stopCellEditing();
-            }
-        }
-        if (cookiesPanel != null) {
-            JTable table = getTableFromCookiesPanel(cookiesPanel);
-            if (table != null && table.isEditing()) {
-                table.getCellEditor().stopCellEditing();
-            }
-        }
-        if (postOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(postOpPanel);
-            if (table != null && table.isEditing()) {
-                table.getCellEditor().stopCellEditing();
-            }
-        }
-        try {
-            Map<String, Object> data = new HashMap<>();
-            // Params 持久化
-            if (paramsPanel != null) {
-                data.put("params", paramsPanel.getParamsValueList());
-            }
-            // Body 持久化（仅json类型）
-            if (bodyPanel != null) {
-                data.put("bodyJson", bodyPanel.getJsonBodyText());
-            }
-            // Headers 持久化
-            if (headersPanel != null) {
-                data.put("headers", headersPanel.getHeadersData());
-            }
-            // Cookies 持久化
-            if (cookiesPanel != null) {
-                data.put("cookies", cookiesPanel.getCookiesData());
-            }
-            // Auth 持久化
-            if (authPanel != null) {
-                data.put("auth", authPanel.getAuthValue());
-            }
-            // PostOp 持久化
-            if (postOpPanel != null) {
-                data.put("postOp", postOpPanel.getPostOpData());
-            }
-            String key = buildApiKey(apiInfo);
-            key = safeFileName(key); // 保证文件名合法，防止非法字符导致保存失败
-            Path dir = Paths.get(getCacheDir());
-            if (!Files.exists(dir)) {
-                Files.createDirectories(dir);
-            }
-            Path file = dir.resolve(key + CACHE_SUFFIX);
-            String json = JSONUtil.toJsonStr(data);
-            Files.write(file, json.getBytes(StandardCharsets.UTF_8));
-            localCache.put(key, data);
-            JOptionPane.showMessageDialog(this, "保存成功！", "提示", JOptionPane.INFORMATION_MESSAGE);
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(this, "保存失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
-        }
-    }
-
-    /**
-     * 构建接口唯一key（项目名+url+method+参数结构hash）
-     */
-    private String buildApiKey(ApiInfo apiInfo) {
-        String projectName = project != null ? project.getName() : "default";
-        String base = projectName + "#" + apiInfo.getUrl() + "#" + apiInfo.getHttpMethod();
-        return base;
-    }
-
-    /**
-     * 加载本地缓存（在 showApiDetail 或 buildParamTab、BodyPanel 等处调用）
-     */
-    private Map<String, Object> loadCustomEdit(ApiInfo apiInfo) {
-        try {
-            String key = safeFileName(buildApiKey(apiInfo));
-            if (localCache.containsKey(key)) {
-                return localCache.get(key);
-            }
-            Path dir = Paths.get(getCacheDir());
-            Path file = dir.resolve(key + CACHE_SUFFIX);
-            if (Files.exists(file)) {
-                String json = Files.readString(file, StandardCharsets.UTF_8);
-                @SuppressWarnings("unchecked")
-                Map<String, Object> data = JSONUtil.toBean(json, Map.class);
-                localCache.put(key, data);
-                return data;
-            }
-        } catch (Exception ignored) {
-        }
-        return new HashMap<>();
-    }
-
-    /**
-     * 检查接口参数结构是否变更，变更则清除本地缓存
-     *
-     * @param apiInfo 当前接口信息
-     */
-    private void clearCacheIfParamChanged(ApiInfo apiInfo) {
-        String key = buildApiKey(apiInfo);
-        Path file = Paths.get(getCacheDir(), key + CACHE_SUFFIX);
-        if (Files.exists(file)) {
-            // 只要参数结构hash变了，key就变了，旧文件不会被加载
-            // 可定期清理CACHE_DIR下的无用文件
-        }
-    }
-
-    /**
-     * 获取本地持久化缓存目录，优先使用用户配置，按项目隔离
-     *
-     * @return 缓存目录绝对路径，结尾带分隔符，系统兼容
-     */
-    private String getCacheDir() {
-        String dir = PropertiesComponent.getInstance().getValue("requestman.cacheDir");
-        if (dir == null || dir.isEmpty()) {
-            dir = Paths.get(System.getProperty("user.home"), ".requestman_cache").toString() + File.separator;
-        }
-        if (!dir.endsWith(File.separator)) {
-            dir = dir + File.separator;
-        }
-        // 按项目名称创建子目录，实现项目隔离
-        String projectName = project != null ? project.getName() : "default";
-        return dir + projectName + File.separator;
-    }
 
     // 重写toString，保证下拉框显示友好
     static {
@@ -882,6 +1240,17 @@ public class RequestManPanel extends JPanel {
      * 切换到自定义接口模式，彻底清空并重建布局，避免页面错乱，每次都新建customPanel
      */
     private void switchToCustomMode() {
+        // 检查是否有未保存的更改
+        if (!checkUnsavedChanges()) {
+            return; // 用户取消，不切换模式
+        }
+
+        // 设置模式
+        customMode = true;
+        if (autoSaveManager != null) {
+            autoSaveManager.setCurrentEditingApi(null);
+        }
+
         // 彻底移除所有子组件，防止残留
         this.removeAll();
         JPanel topPanel = buildTopPanel();
@@ -889,7 +1258,7 @@ public class RequestManPanel extends JPanel {
         customPanel = buildCustomPanel();
         // 清空响应面板内容，避免JSONPath提取器使用上一个接口的响应内容
         if (responsePanel != null) {
-            responsePanel.setResponseText("点击'发送'按钮获取返回结果");
+            responsePanel.setResponseText(RequestManBundle.message("main.response.placeholder"));
             responsePanel.setStatusText("");
             responsePanel.collapse();
         }
@@ -905,12 +1274,23 @@ public class RequestManPanel extends JPanel {
      * 切换到自动扫描模式，彻底清空并重建布局，避免页面错乱
      */
     private void switchToScanMode() {
+        // 检查是否有未保存的更改
+        if (!checkUnsavedChanges()) {
+            return; // 用户取消，不切换模式
+        }
+
+        // 设置模式
+        customMode = false;
+        if (autoSaveManager != null) {
+            autoSaveManager.setCurrentScanningApi(null);
+        }
+
         // 彻底移除所有子组件，防止残留
         this.removeAll();
         JPanel topPanel = buildTopPanel();
         // 清空响应面板内容，避免JSONPath提取器使用上一个接口的响应内容
         if (responsePanel != null) {
-            responsePanel.setResponseText("点击'发送'按钮获取返回结果");
+            responsePanel.setResponseText(RequestManBundle.message("main.response.placeholder"));
             responsePanel.setStatusText("");
             responsePanel.collapse();
         }
@@ -937,15 +1317,57 @@ public class RequestManPanel extends JPanel {
         customApiListModel = new DefaultListModel<>();
         customApiList = new JList<>(customApiListModel);
         customApiList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+
+        // 启用拖拽功能
+        customApiList.setDragEnabled(true);
+        customApiList.setDropMode(DropMode.INSERT);
+
+        // 设置拖拽提示
+        customApiList.setToolTipText(RequestManBundle.message("custom.drag.tip"));
+
+        // 分割线渲染：记录插入位置并设置自定义渲染器
+        dropLineIndex = -1;
+        dropInsert = true;
+        customApiList.setCellRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                JLabel c = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                int top = 0, bottom = 0;
+                // 顶部分割线：插入到当前单元格前
+                if (dropLineIndex >= 0 && dropInsert && index == dropLineIndex) {
+                    top = 2;
+                }
+                // 末尾插入：在最后一项下方画线
+                if (dropLineIndex == customApiListModel.getSize() && index == customApiListModel.getSize() - 1) {
+                    bottom = 2;
+                }
+                if (top > 0 || bottom > 0) {
+                    c.setBorder(BorderFactory.createMatteBorder(top, 0, bottom, 0, new Color(0, 120, 215)));
+                } else {
+                    c.setBorder(null);
+                }
+                return c;
+            }
+        });
+
+        // 添加拖拽监听器
+        setupDragAndDropSupport();
+
         customApiList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
                 CustomApiInfo selected = customApiList.getSelectedValue();
+                // 检查是否有未保存的更改
+                if (!checkUnsavedChanges()) {
+                    // 用户取消，恢复之前的选择
+                    customApiList.setSelectedValue(editingApi, true);
+                    return;
+                }
                 showCustomApiDetail(selected);
             }
         });
 
         // 添加右键菜单
-        setupCustomApiListContextMenu();
+        CustomApiContextMenuManager.setupCustomApiListContextMenu(this, project);
 
         JScrollPane listScroll = new JScrollPane(customApiList);
         listScroll.setMinimumSize(new Dimension(180, 300));
@@ -962,66 +1384,53 @@ public class RequestManPanel extends JPanel {
         customUrlField.setMaximumSize(new Dimension(400, 28));
         customMethodBox = new JComboBox<>(new String[]{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"});
         customMethodBox.setMaximumSize(new Dimension(400, 28));
-        customParamsPanel = new EditableParamsPanel(new ArrayList<>());
+        customParamsPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.PARAMS, new ArrayList<>(), false, this::updateUrlFromPathParams);
         customPostOpPanel = new PostOpPanel();
-        customBodyPanel = new EditableBodyPanel(new ArrayList<>());
-        saveCustomBtn = new JButton("保存");
-        deleteCustomBtn = new JButton("删除");
+        customBodyPanel = new EditableBodyPanel(new ArrayList<>(), true);
+        saveCustomBtn = new JButton(RequestManBundle.message("common.save"));
+        deleteCustomBtn = new JButton(RequestManBundle.message("common.delete"));
         // 组装右侧
         customEditPanel.removeAll();
         customEditPanel.setLayout(new BoxLayout(customEditPanel, BoxLayout.Y_AXIS));
-        // 顶部一行
-        JPanel topRow = new JPanel();
-        topRow.setLayout(new BoxLayout(topRow, BoxLayout.X_AXIS));
-        JLabel nameLabel = new JLabel("接口名称:");
+        // 顶部一行（仅UI拼装）
+        JLabel nameLabel = new JLabel(RequestManBundle.message("custom.name.label") + ":");
         nameLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
         customNameField = new JTextField();
         customNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         customNameField.setPreferredSize(new Dimension(0, 28));
         customNameField.setAlignmentY(Component.CENTER_ALIGNMENT);
-        topRow.add(nameLabel);
-        topRow.add(Box.createHorizontalStrut(8));
-        topRow.add(customNameField);
-        topRow.add(Box.createHorizontalStrut(16));
-        topRow.add(customParamsPanel);
-        topRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        topRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-        customEditPanel.add(topRow);
-        // URL区
+        customNameStarLabel = new JLabel(" ");
+        customNameStarLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+        Dimension starSize = new Dimension(12, 28);
+        customNameStarLabel.setPreferredSize(starSize);
+        customNameStarLabel.setMaximumSize(starSize);
+        customNameStarLabel.setMinimumSize(starSize);
+        CustomEditPanelsBuilder.TopRowComponents trc = new CustomEditPanelsBuilder.TopRowComponents();
+        trc.nameLabel = nameLabel;
+        trc.nameField = customNameField;
+        trc.nameStarLabel = null; // 初始创建面板此处无需星号
+        trc.extraComponent = customParamsPanel;
+        customEditPanel.add(CustomEditPanelsBuilder.assembleTopRow(trc));
+        // URL/METHOD（仅UI拼装）
         JLabel urlLabel = new JLabel("URL:");
-        urlLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        customEditPanel.add(urlLabel);
         customUrlField = new JTextField();
-        customUrlField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        customUrlField.setAlignmentX(Component.LEFT_ALIGNMENT);
-        customEditPanel.add(customUrlField);
-        // HTTP方法区
         JLabel methodLabel = new JLabel("HTTP方法:");
-        methodLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        customEditPanel.add(methodLabel);
         customMethodBox = new JComboBox<>(new String[]{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"});
-        customMethodBox.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        customMethodBox.setAlignmentX(Component.LEFT_ALIGNMENT);
-        customEditPanel.add(customMethodBox);
+        CustomEditPanelsBuilder.assembleUrlAndMethod(customEditPanel, urlLabel, customUrlField, methodLabel, customMethodBox);
         // Tab区
         JTabbedPane tabbedPane = buildCustomEditTabs();
         tabbedPane.setAlignmentX(Component.LEFT_ALIGNMENT);
         tabbedPane.setMaximumSize(new Dimension(Integer.MAX_VALUE, 300));
         customEditPanel.add(tabbedPane);
-        // 按钮区
-        JPanel btnPanel = new JPanel();
-        btnPanel.add(saveCustomBtn);
-        btnPanel.add(deleteCustomBtn);
-        btnPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
-        btnPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 40));
-        customEditPanel.add(btnPanel);
+        // 按钮区（仅UI拼装）
+        customEditPanel.add(CustomEditPanelsBuilder.assembleButtonRow(saveCustomBtn, deleteCustomBtn));
         splitPane.setRightComponent(customEditPanel);
         // 事件绑定 - 使用标志位避免重复注册
         if (saveCustomBtn.getActionListeners().length == 0) {
             saveCustomBtn.addActionListener(e -> saveOrUpdateCustomApi());
         }
         if (deleteCustomBtn.getActionListeners().length == 0) {
-            deleteCustomBtn.addActionListener(e -> deleteSelectedCustomApi());
+            deleteCustomBtn.addActionListener(e -> CustomApiContextMenuManager.deleteSelectedCustomApi(this, project));
         }
         return splitPane;
     }
@@ -1029,20 +1438,18 @@ public class RequestManPanel extends JPanel {
     /**
      * 显示自定义接口详情到右侧编辑面板
      */
-    private void showCustomApiDetail(CustomApiInfo api) {
+    public void showCustomApiDetail(CustomApiInfo api) {
         // 清空响应面板内容，避免JSONPath提取器使用上一个接口的响应内容
         if (responsePanel != null) {
-            responsePanel.setResponseText("点击'发送'按钮获取返回结果");
+            responsePanel.setResponseText(RequestManBundle.message("main.response.placeholder"));
             responsePanel.setStatusText("");
             responsePanel.collapse();
         }
         customEditPanel.removeAll();
         customEditPanel.setLayout(new BoxLayout(customEditPanel, BoxLayout.Y_AXIS));
-        // 顶部一行
-        JPanel topRow = new JPanel();
-        topRow.setLayout(new BoxLayout(topRow, BoxLayout.X_AXIS));
-        JLabel nameLabel = new JLabel("接口名称:");
-        nameLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
+        // 顶部一行（仅UI拼装）
+        customNameLabel = new JLabel(CUSTOM_NAME_LABEL_TEXT);
+        customNameLabel.setAlignmentY(Component.CENTER_ALIGNMENT);
         customNameField = new JTextField();
         customNameField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         customNameField.setPreferredSize(new Dimension(0, 28));
@@ -1052,14 +1459,12 @@ public class RequestManPanel extends JPanel {
                 btn -> doSendAndDownloadCustom(btn)
         );
         splitSendPanel.setAlignmentY(Component.CENTER_ALIGNMENT);
-        topRow.add(nameLabel);
-        topRow.add(Box.createHorizontalStrut(8));
-        topRow.add(customNameField);
-        topRow.add(Box.createHorizontalStrut(16));
-        topRow.add(splitSendPanel);
-        topRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        topRow.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-        customEditPanel.add(topRow);
+        CustomEditPanelsBuilder.TopRowComponents trc = new CustomEditPanelsBuilder.TopRowComponents();
+        trc.nameLabel = customNameLabel;
+        trc.nameField = customNameField;
+        trc.nameStarLabel = customNameStarLabel;
+        trc.extraComponent = splitSendPanel;
+        customEditPanel.add(CustomEditPanelsBuilder.assembleTopRow(trc));
         // URL区
         JLabel urlLabel = new JLabel("URL:");
         urlLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1083,8 +1488,8 @@ public class RequestManPanel extends JPanel {
         customEditPanel.add(tabbedPane);
         // 按钮区
         JPanel btnPanel = new JPanel();
-        saveCustomBtn = new JButton("保存");
-        deleteCustomBtn = new JButton("删除");
+        saveCustomBtn = new JButton(RequestManBundle.message("common.save"));
+        deleteCustomBtn = new JButton(RequestManBundle.message("common.delete"));
         btnPanel.add(saveCustomBtn);
         btnPanel.add(deleteCustomBtn);
         btnPanel.setAlignmentX(Component.LEFT_ALIGNMENT);
@@ -1093,18 +1498,52 @@ public class RequestManPanel extends JPanel {
         // 回显数据
         if (api == null) {
             editingApi = null;
+            // 尝试从缓存恢复数据
+            Map<String, Object> cache = CustomApiStorage.loadCustomParamsFromCache(project);
+            if (cache.containsKey("customParams")) {
+                List<ApiParam> cachedParams = new ArrayList<>();
+                Object paramsObj = cache.get("customParams");
+                if (paramsObj instanceof List<?> list) {
+                    for (Object obj : list) {
+                        if (obj instanceof ApiParam) {
+                            cachedParams.add((ApiParam) obj);
+                        } else if (obj instanceof Map map) {
+                            String name = (String) map.get("name");
+                            String value = (String) map.get("value");
+                            String type = (String) map.get("type");
+                            String description = (String) map.get("description");
+                            ApiParam param = new ApiParam();
+                            param.setName(name);
+                            param.setValue(value);
+                            param.setType(type);
+                            param.setDescription(description);
+                            cachedParams.add(param);
+                        }
+                    }
+                }
+                if (!cachedParams.isEmpty()) {
+                    customParamsPanel.setParams(cachedParams);
+                }
+            }
         } else {
+            isInitializing = true;
             customNameField.setText(api.getName());
             customUrlField.setText(api.getUrl());
             customMethodBox.setSelectedItem(api.getHttpMethod());
+            isInitializing = false;
             if (customParamsPanel != null) {
+                isInitializing = true;
                 customParamsPanel.setParams(api.getParams() != null ? api.getParams() : new ArrayList<>());
+                isInitializing = false;
             }
             if (customPostOpPanel != null && api.getPostOps() != null) {
+                isInitializing = true;
                 customPostOpPanel.setPostOpData(api.getPostOps());
+                isInitializing = false;
             }
             if (customBodyPanel != null) {
                 String bodyType = api.getBodyType() != null ? api.getBodyType() : "none";
+                isInitializing = true;
                 customBodyPanel.setBodyType(bodyType);
                 if ("json".equals(bodyType)) {
                     customBodyPanel.setJsonBody(api.getBody());
@@ -1115,16 +1554,28 @@ public class RequestManPanel extends JPanel {
                 } else if ("xml".equals(bodyType)) {
                     customBodyPanel.setXmlBody(api.getBody());
                 } else if ("binary".equals(bodyType)) {
-                    // 这里假设api.getBody()为Base64或十六进制字符串，需按实际情况转换
-                    // 示例：customBodyPanel.setBinaryBody(decodeToBytes(api.getBody()));
-                    // 这里直接传字符串（如有需要可实现decodeToBytes）
-                    customBodyPanel.setBinaryBody(api.getBody() != null ? api.getBody().getBytes() : new byte[0]);
+                    customBodyPanel.setFilePathFromBinaryText(api.getBody());
                 }
+                isInitializing = false;
+            }
+            // 恢复headers
+            if (customHeadersPanel != null) {
+                isInitializing = true;
+                customHeadersPanel.setHeadersData(api.getHeaders() != null ? api.getHeaders() : new ArrayList<>());
+                isInitializing = false;
+            }
+            // 恢复cookie
+            if (customCookiesPanel != null) {
+                isInitializing = true;
+                customCookiesPanel.setCookiesData(api.getCookieItems() != null ? api.getCookieItems() : new ArrayList<>());
+                isInitializing = false;
             }
             // 恢复认证信息
             if (customAuthPanel != null) {
+                isInitializing = true;
                 customAuthPanel.setAuthMode(api.getAuthMode());
                 customAuthPanel.setAuthValue(api.getAuthValue());
+                isInitializing = false;
             }
             editingApi = api;
         }
@@ -1133,10 +1584,436 @@ public class RequestManPanel extends JPanel {
             saveCustomBtn.addActionListener(e -> saveOrUpdateCustomApi());
         }
         if (deleteCustomBtn.getActionListeners().length == 0) {
-            deleteCustomBtn.addActionListener(e -> deleteSelectedCustomApi());
+            deleteCustomBtn.addActionListener(e -> CustomApiContextMenuManager.deleteSelectedCustomApi(this, project));
         }
+
+        // 设置自动保存管理器的当前编辑接口
+        autoSaveManager.setCurrentEditingApi(editingApi);
+
+        // 添加自动保存监听器
+        setupAutoSaveListeners();
+
+        // 初始化状态
+        updateSaveButtonState();
+        updateApiNameDisplay();
+
         customEditPanel.revalidate();
         customEditPanel.repaint();
+    }
+
+    /**
+     * 自动保存自定义接口（静默保存）
+     */
+    private void autoSaveCustomApi(CustomApiInfo api) {
+        if (api == null) {
+            return;
+        }
+
+        try {
+            // 保存前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
+            stopAllTableEditing();
+
+            // 获取当前编辑的内容
+            String name = customNameField.getText().trim();
+            String url = customUrlField.getText().trim();
+            String method = (String) customMethodBox.getSelectedItem();
+
+            if (name.isEmpty() || url.isEmpty() || method == null || method.isEmpty()) {
+                return; // 基本信息不完整，不进行自动保存
+            }
+
+            // 获取请求体内容
+            String body = "";
+            String bodyType = customBodyPanel != null ? customBodyPanel.getBodyType() : "none";
+            List<ApiParam> bodyParams = new ArrayList<>();
+            if (customBodyPanel != null) {
+                if ("none".equals(bodyType)) {
+                    body = "";
+                } else if ("json".equals(bodyType)) {
+                    body = customBodyPanel.getJsonBodyText();
+                } else if ("form-data".equals(bodyType)) {
+                    bodyParams = customBodyPanel.getBodyParams();
+                } else if ("x-www-form-urlencoded".equals(bodyType)) {
+                    bodyParams = customBodyPanel.getBodyParams();
+                } else if ("xml".equals(bodyType)) {
+                    body = customBodyPanel.getXmlBodyText();
+                } else if ("binary".equals(bodyType)) {
+                    body = customBodyPanel.getFilePathFromBinaryText();
+                }
+            }
+
+            List<ApiParam> params = customParamsPanel != null ? customParamsPanel.getParams() : new ArrayList<>();
+            params = params.stream()
+                    .filter(p -> p.getName() != null && !p.getName().trim().isEmpty())
+                    .collect(java.util.stream.Collectors.toList());
+
+            List<PostOpItem> postOps = customPostOpPanel != null ? customPostOpPanel.getPostOpData() : new ArrayList<>();
+
+            // 更新接口信息
+            api.setName(name);
+            api.setUrl(url);
+            api.setHttpMethod(method);
+            api.setParams(params);
+            api.setPostOps(postOps);
+            api.setBody(body);
+            api.setBodyType(bodyType);
+            api.setBodyParams(bodyParams);
+
+            // 保存认证信息
+            if (customAuthPanel != null) {
+                api.setAuthMode(customAuthPanel.getAuthMode());
+                api.setAuthValue(customAuthPanel.getAuthValue());
+            }
+
+            // 持久化保存
+            CustomApiStorage.persistCustomApiList(project, customApiListModel);
+
+            // 标记已保存
+            autoSaveManager.markAsSaved();
+            updateSaveButtonState();
+            updateApiNameDisplay();
+
+        } catch (Exception e) {
+            // 自动保存失败时不显示错误提示，避免干扰用户
+            LogUtil.error("自动保存失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 自动保存扫描接口
+     */
+    private void autoSaveScanningApi(ApiInfo api) {
+        if (api == null) {
+            return;
+        }
+
+        try {
+            // 停止所有表格编辑
+            stopTableEditingForTabIndex(currentTabIndex);
+
+            // 保存到本地缓存
+            ApiCacheStorage.saveCustomEdit(api, project, this, autoSaveManager);
+
+            // 标记为已保存
+            autoSaveManager.markAsSaved();
+            updateUIState();
+
+            if (headersPanel != null) {
+                api.setHeaders(headersPanel.getHeadersData());
+            }
+            if (authPanel != null) {
+                api.setAuthMode(authPanel.getAuthMode());
+                api.setAuthValue(authPanel.getAuthValue());
+            }
+            if (postOpPanel != null) {
+                api.setPostOps(postOpPanel.getPostOpData());
+            }
+
+        } catch (Exception e) {
+            // 自动保存失败时不显示错误提示，避免干扰用户
+            LogUtil.error("自动保存扫描接口失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 停止所有表格编辑
+     */
+    private void stopAllTableEditing() {
+        TableEditingManager.RequestContext ctx = new TableEditingManager.RequestContext(this);
+        TableEditingManager.stopAll(ctx);
+    }
+
+    /**
+     * 停止指定Tab索引中的表格编辑（精确停止）
+     */
+    private void stopTableEditingForTabIndex(int tabIndex) {
+        TableEditingManager.RequestContext ctx = new TableEditingManager.RequestContext(this);
+        TableEditingManager.stopByTabIndex(ctx, tabIndex);
+    }
+
+    /**
+     * 更新保存按钮状态
+     */
+    private void updateSaveButtonState() {
+        if (saveCustomBtn != null) {
+            boolean hasChanges = autoSaveManager.hasUnsavedChanges();
+            saveCustomBtn.setEnabled(hasChanges);
+        }
+        if (scanSaveButton != null) {
+            boolean hasChanges = autoSaveManager.hasUnsavedChanges();
+            scanSaveButton.setEnabled(hasChanges);
+        }
+    }
+
+    /**
+     * 更新UI状态
+     */
+    private void updateUIState() {
+        updateSaveButtonState();
+        updateApiNameDisplay();
+
+        // 检查param字段是否发生变化，如果有Path参数则更新URL
+        if (customMode && customParamsPanel != null) {
+            // 获取当前参数列表
+            List<ApiParam> currentParams = customParamsPanel.getParams();
+
+            // 检查是否有有效的Path参数
+            boolean hasPathParams = currentParams.stream()
+                    .anyMatch(param -> "Path".equals(param.getType()) &&
+                            param.getName() != null && !param.getName().trim().isEmpty() &&
+                            param.getValue() != null && !param.getValue().trim().isEmpty());
+
+            // 如果有Path参数，则更新URL
+            if (hasPathParams) {
+                updateUrlFromPathParams();
+            }
+        }
+    }
+
+    /**
+     * 更新接口名称显示（包括*号）
+     */
+    private void updateApiNameDisplay() {
+        // 自定义模式下，仅更新自定义接口名称的星号显示
+        if (customMode) {
+            if (customNameStarLabel != null) {
+                if (autoSaveManager != null && autoSaveManager.hasUnsavedChanges()) {
+                    customNameStarLabel.setText("<html><font color='red'>*</font></html>");
+                } else {
+                    customNameStarLabel.setText(" ");
+                }
+            }
+            return;
+        }
+
+        // 扫描模式下，更新详情面板标题星号
+        updateDetailPanelTitle();
+    }
+
+    /**
+     * 根据未保存状态更新详情面板标题星号
+     */
+    private void updateDetailPanelTitle() {
+        if (detailPanel == null) {
+            return;
+        }
+        String baseTitle = RequestManBundle.message("main.api.details");
+        boolean showStar = autoSaveManager != null && autoSaveManager.hasUnsavedChanges();
+        String title = showStar ? "<html>" + baseTitle + " <font color='red'>*</font></html>" : baseTitle;
+        detailPanel.setBorder(BorderFactory.createTitledBorder(title));
+        detailPanel.revalidate();
+        detailPanel.repaint();
+    }
+
+    /**
+     * 设置自动保存监听器
+     */
+    private void setupAutoSaveListeners() {
+        if (autoSaveManager == null) {
+            return;
+        }
+
+        // 为文本字段添加监听器
+        if (customNameField != null) {
+            autoSaveManager.addTextChangeListener(customNameField, "name");
+        }
+        if (customUrlField != null) {
+            autoSaveManager.addTextChangeListener(customUrlField, "url");
+        }
+
+        // 为下拉框添加监听器
+        if (customMethodBox != null) {
+            autoSaveManager.addSelectionChangeListener(customMethodBox, "method");
+        }
+
+        // 为表格添加监听器
+        if (customParamsPanel != null) {
+            JTable customParamsPanelTable = SwingUtils.getTable(customParamsPanel);
+            if (customParamsPanelTable != null) {
+                autoSaveManager.addTableChangeListener(customParamsPanelTable, "param");
+
+                // 注意：param_location_changed字段变化会通过AutoSaveManager的uiUpdateCallback机制触发
+                // 在updateUIState方法中会检查是否需要更新URL
+            }
+        }
+        if (customPostOpPanel != null) {
+            JTable customPostOpPanelTable = SwingUtils.getTable(customPostOpPanel);
+            if (customPostOpPanelTable != null) {
+                autoSaveManager.addTableChangeListener(customPostOpPanelTable, "postOp");
+            }
+        }
+
+        // 为请求体面板添加监听器
+        if (customBodyPanel != null) {
+            // JSON文本区域
+            JTextArea jsonArea = getJsonAreaFromBodyPanel(customBodyPanel);
+            if (jsonArea != null) {
+                autoSaveManager.addTextChangeListener(jsonArea, "body");
+            }
+
+            // XML文本区域
+            JTextArea xmlArea = getXmlAreaFromBodyPanel(customBodyPanel);
+            if (xmlArea != null) {
+                autoSaveManager.addTextChangeListener(xmlArea, "body");
+            }
+
+            // form-data表格
+            JTable formTable = SwingUtils.getTable(customBodyPanel.getFormDataPanel());
+            if (formTable != null) {
+                autoSaveManager.addTableChangeListener(formTable, "bodyParams");
+            }
+
+            // urlencoded表格
+            JTable urlTable = SwingUtils.getTable(customBodyPanel.getUrlencodedPanel());
+            if (urlTable != null) {
+                autoSaveManager.addTableChangeListener(urlTable, "bodyParams");
+            }
+
+            // binary 文件路径文本框
+            Object binaryObj = SwingUtils.getObject(customBodyPanel, "binaryPanel");
+            if (binaryObj instanceof BinaryBodyPanel) {
+                BinaryBodyPanel customBinaryPanel = (BinaryBodyPanel) binaryObj;
+                JTextField filePathField = customBinaryPanel.getFilePathField();
+                if (filePathField != null) {
+                    autoSaveManager.addTextChangeListener(filePathField, "body");
+                }
+            }
+        }
+    }
+
+    /**
+     * 设置扫描模式自动保存监听器
+     */
+    private void setupScanningAutoSaveListeners() {
+        if (autoSaveManager == null) {
+            return;
+        }
+        // 为参数面板添加监听器
+        if (paramsPanel != null) {
+            JTable paramsPanelTable = SwingUtils.getTable(paramsPanel);
+            if (paramsPanelTable != null) {
+                autoSaveManager.addTableChangeListener(paramsPanelTable, "param");
+            }
+        }
+        // 为请求体面板添加监听器
+        if (bodyPanel != null) {
+            // 类型下拉框
+            JComboBox<String> typeComboBox = bodyPanel.getTypeComboBox();
+            if (typeComboBox != null && typeComboBox.getSelectedItem() != null) {
+                autoSaveManager.addSelectionChangeListener(typeComboBox, "bodyType");
+            }
+            // JSON文本区域
+            JsonBodyPanel jsonPanel = bodyPanel.getJsonBodyPanel();
+            if (jsonPanel != null && jsonPanel.getTextAreaRef() != null) {
+                autoSaveManager.addTextChangeListener(jsonPanel.getTextAreaRef(), "body");
+            }
+            // XML文本区域
+            XmlBodyPanel xmlPanel = bodyPanel.getXmlBodyPanel();
+            if (xmlPanel != null && xmlPanel.getTextAreaRef() != null) {
+                autoSaveManager.addTextChangeListener(xmlPanel.getTextAreaRef(), "body");
+            }
+            // form-data表格
+            JTable formTable = getTableFromPanel(bodyPanel, "formDataPanel");
+            if (formTable != null) {
+                autoSaveManager.addTableChangeListener(formTable, "bodyParams");
+            }
+            // urlencoded表格
+            JTable urlTable = getTableFromPanel(bodyPanel, "urlencodedPanel");
+            if (urlTable != null) {
+                autoSaveManager.addTableChangeListener(urlTable, "bodyParams");
+            }
+            // binary 文件路径文本框
+            BinaryBodyPanel scanBinaryPanel = bodyPanel.getBinaryPanel();
+            if (scanBinaryPanel != null && scanBinaryPanel.getFilePathField() != null) {
+                autoSaveManager.addTextChangeListener(scanBinaryPanel.getFilePathField(), "body");
+            }
+        }
+        // 为头部面板添加监听器
+        if (headersPanel != null) {
+            if (headersPanel.getTable() != null) {
+                autoSaveManager.addTableChangeListener(headersPanel.getTable(), "headers");
+            }
+        }
+        // 为Cookie面板添加监听器
+        if (cookiesPanel != null) {
+            if (cookiesPanel.getTable() != null) {
+                autoSaveManager.addTableChangeListener(cookiesPanel.getTable(), "cookie");
+            }
+        }
+        // 为认证面板添加监听器
+        if (authPanel != null) {
+            JComboBox<?> authModeCombo = getAuthModeComboBox(authPanel);
+            if (authModeCombo != null) {
+                autoSaveManager.addSelectionChangeListener(authModeCombo, "authMode");
+            }
+            JTextField authValueField = getAuthValueField(authPanel);
+            if (authValueField != null) {
+                autoSaveManager.addTextChangeListener(authValueField, "authValue");
+            }
+        }
+        // 为后置操作面板添加监听器
+        if (postOpPanel != null) {
+            JTable postOpPanelTable = SwingUtils.getTable(postOpPanel);
+            if (postOpPanelTable != null) {
+                autoSaveManager.addTableChangeListener(postOpPanelTable, "postOp");
+            }
+        }
+    }
+
+    /**
+     * 检查是否有未保存的更改并提示用户
+     */
+    public boolean checkUnsavedChanges() {
+        if (autoSaveManager != null && autoSaveManager.hasUnsavedChanges()) {
+            // 如果启用自动保存，直接保存，不弹窗
+            if (autoSaveManager.isAutoSaveEnabled()) {
+                // 直接走保存逻辑
+                if (customMode) {
+                    saveOrUpdateCustomApi();
+                } else if (currentScanningApi != null) {
+                    // 保存前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
+                    stopAllTableEditing();
+                    ApiCacheStorage.saveCustomEdit(currentScanningApi, project, this, autoSaveManager);
+                    // 标记为已保存
+                    autoSaveManager.markAsSaved();
+                    updateUIState();
+                }
+                return true;
+            }
+
+            // 如果未启用自动保存，弹窗询问用户
+            int result = JOptionPane.showConfirmDialog(
+                    this,
+                    RequestManBundle.message("unsaved.confirm.message"),
+                    RequestManBundle.message("main.tip"),
+                    JOptionPane.YES_NO_CANCEL_OPTION,
+                    JOptionPane.QUESTION_MESSAGE
+            );
+
+            if (result == JOptionPane.YES_OPTION) {
+                // 用户选择保存
+                if (customMode) {
+                    saveOrUpdateCustomApi();
+                } else if (currentScanningApi != null) {
+                    // 保存前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
+                    stopAllTableEditing();
+                    ApiCacheStorage.saveCustomEdit(currentScanningApi, project, this, autoSaveManager);
+                    // 标记为已保存
+                    autoSaveManager.markAsSaved();
+                    updateUIState();
+                }
+                return true;
+            } else if (result == JOptionPane.NO_OPTION) {
+                // 用户选择不保存，直接离开
+                autoSaveManager.markAsSaved(); // 清除未保存状态
+                updateDetailPanelTitle();
+                return true;
+            } else {
+                // 用户选择取消，不离开
+                return false;
+            }
+        }
+        return true; // 没有未保存的更改，可以离开
     }
 
     /**
@@ -1144,30 +2021,7 @@ public class RequestManPanel extends JPanel {
      */
     private void saveOrUpdateCustomApi() {
         // 保存前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
-        if (customParamsPanel != null) {
-            JTable table = getTableFromEditableParamsPanel(customParamsPanel);
-            if (table != null && table.isEditing()) {
-                table.getCellEditor().stopCellEditing();
-            }
-        }
-        if (customPostOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(customPostOpPanel);
-            if (table != null && table.isEditing()) {
-                table.getCellEditor().stopCellEditing();
-            }
-        }
-        if (customBodyPanel != null) {
-            // form-data
-            JTable formTable = getTableFromEditableParamsPanel(customBodyPanel.getFormDataPanel());
-            if (formTable != null && formTable.isEditing()) {
-                formTable.getCellEditor().stopCellEditing();
-            }
-            // x-www-form-urlencoded
-            JTable urlTable = getTableFromEditableParamsPanel(customBodyPanel.getUrlencodedPanel());
-            if (urlTable != null && urlTable.isEditing()) {
-                urlTable.getCellEditor().stopCellEditing();
-            }
-        }
+        stopAllTableEditing();
         String name = customNameField.getText().trim();
         String url = customUrlField.getText().trim();
         String method = (String) customMethodBox.getSelectedItem();
@@ -1179,15 +2033,15 @@ public class RequestManPanel extends JPanel {
             if ("none".equals(bodyType)) {
                 body = "";
             } else if ("json".equals(bodyType)) {
-                body = customBodyPanel.getJsonBody();
+                body = customBodyPanel.getJsonBodyText();
             } else if ("form-data".equals(bodyType)) {
-                bodyParams = customBodyPanel.getFormDataParams();
+                bodyParams = customBodyPanel.getBodyParams();
             } else if ("x-www-form-urlencoded".equals(bodyType)) {
-                bodyParams = customBodyPanel.getUrlencodedParams();
+                bodyParams = customBodyPanel.getBodyParams();
             } else if ("xml".equals(bodyType)) {
-                body = customBodyPanel.getXmlBody();
+                body = customBodyPanel.getXmlBodyText();
             } else if ("binary".equals(bodyType)) {
-                body = new String(customBodyPanel.getBinaryBody());
+                body = customBodyPanel.getFilePathFromBinaryText();
             }
         }
         List<ApiParam> params = customParamsPanel != null ? customParamsPanel.getParams() : new ArrayList<>();
@@ -1197,7 +2051,7 @@ public class RequestManPanel extends JPanel {
                 .collect(java.util.stream.Collectors.toList());
         java.util.List<PostOpItem> postOps = customPostOpPanel != null ? customPostOpPanel.getPostOpData() : new java.util.ArrayList<>();
         if (name.isEmpty() || url.isEmpty() || method == null || method.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "接口名称、URL、方法不能为空！", "提示", JOptionPane.WARNING_MESSAGE);
+            JOptionPane.showMessageDialog(this, RequestManBundle.message("custom.required"), RequestManBundle.message("main.tip"), JOptionPane.WARNING_MESSAGE);
             return;
         }
         if (editingApi == null) {
@@ -1209,6 +2063,14 @@ public class RequestManPanel extends JPanel {
             if (customAuthPanel != null) {
                 api.setAuthMode(customAuthPanel.getAuthMode());
                 api.setAuthValue(customAuthPanel.getAuthValue());
+            }
+            // 保存headers
+            if (customHeadersPanel != null) {
+                api.setHeaders(customHeadersPanel.getHeadersData());
+            }
+            // 保存cookice
+            if (customCookiesPanel != null) {
+                api.setCookieItems(customCookiesPanel.getCookiesData());
             }
             customApiListModel.addElement(api);
         } else {
@@ -1226,153 +2088,30 @@ public class RequestManPanel extends JPanel {
                 editingApi.setAuthMode(customAuthPanel.getAuthMode());
                 editingApi.setAuthValue(customAuthPanel.getAuthValue());
             }
+            // 保存headers
+            if (customHeadersPanel != null) {
+                editingApi.setHeaders(customHeadersPanel.getHeadersData());
+            }
+            // 保存cookice
+            if (customCookiesPanel != null) {
+                editingApi.setCookieItems(customCookiesPanel.getCookiesData());
+            }
             customApiList.repaint();
         }
-        persistCustomApiList();
-        JOptionPane.showMessageDialog(this, "保存成功！", "提示", JOptionPane.INFORMATION_MESSAGE);
-    }
+        CustomApiStorage.persistCustomApiList(project, customApiListModel);
 
-    /**
-     * 设置自定义接口列表的右键菜单
-     */
-    private void setupCustomApiListContextMenu() {
-        JPopupMenu contextMenu = new JPopupMenu();
+        // 保存自定义参数到缓存
+        CustomApiStorage.saveCustomParamsToCache(customParamsPanel, project);
 
-        // 导入菜单项
-        JMenuItem importMenuItem = new JMenuItem("导入");
-        importMenuItem.addActionListener(e -> importCustomApis());
-        contextMenu.add(importMenuItem);
-
-        // 添加分隔线
-        contextMenu.addSeparator();
-
-        // 导出菜单项
-        JMenuItem exportMenuItem = new JMenuItem("导出");
-        exportMenuItem.addActionListener(e -> exportSelectedCustomApis());
-        contextMenu.add(exportMenuItem);
-
-        // 删除菜单项
-        JMenuItem deleteMenuItem = new JMenuItem("删除");
-        deleteMenuItem.addActionListener(e -> deleteSelectedCustomApis());
-        contextMenu.add(deleteMenuItem);
-
-        // 添加右键菜单监听器
-        customApiList.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mousePressed(java.awt.event.MouseEvent e) {
-                if (e.isPopupTrigger()) {
-                    showContextMenu(e);
-                }
-            }
-
-            @Override
-            public void mouseReleased(java.awt.event.MouseEvent e) {
-                if (e.isPopupTrigger()) {
-                    showContextMenu(e);
-                }
-            }
-
-            private void showContextMenu(java.awt.event.MouseEvent e) {
-                int index = customApiList.locationToIndex(e.getPoint());
-                if (index >= 0) {
-                    // 如果点击的项不在选中范围内，则选中该项
-                    if (!customApiList.isSelectedIndex(index)) {
-                        customApiList.setSelectedIndex(index);
-                    }
-                }
-                contextMenu.show(customApiList, e.getX(), e.getY());
-            }
-        });
-    }
-
-
-    /**
-     * 导入自定义接口
-     */
-    private void importCustomApis() {
-        // 获取当前所有接口列表用于导出时的参考
-        List<CustomApiInfo> currentApis = new ArrayList<>();
-        for (int i = 0; i < customApiListModel.getSize(); i++) {
-            currentApis.add(customApiListModel.getElementAt(i));
-        }
-
-        ImportExportDialog dialog = new ImportExportDialog(project, true, currentApis, customApiListModel);
-        if (dialog.showAndGet()) {
-            // 导入成功后刷新界面
-            customApiList.repaint();
-            persistCustomApiList();
+        // 标记已保存并更新状态
+        autoSaveManager.markAsSaved();
+        updateSaveButtonState();
+        updateApiNameDisplay();
+        if (!autoSaveManager.isAutoSaveEnabled()) {
+            JOptionPane.showMessageDialog(this, RequestManBundle.message("common.save.success"), RequestManBundle.message("main.tip"), JOptionPane.INFORMATION_MESSAGE);
         }
     }
 
-    /**
-     * 导出选中的自定义接口
-     */
-    private void exportSelectedCustomApis() {
-        int[] selectedIndices = customApiList.getSelectedIndices();
-        if (selectedIndices.length == 0) {
-            JOptionPane.showMessageDialog(this, "请先选择要导出的接口", "提示", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-
-        List<CustomApiInfo> selectedApis = new ArrayList<>();
-        for (int index : selectedIndices) {
-            selectedApis.add(customApiListModel.getElementAt(index));
-        }
-
-        ImportExportDialog dialog = new ImportExportDialog(project, false, selectedApis, customApiListModel);
-        dialog.show();
-    }
-
-    /**
-     * 删除选中的自定义接口
-     */
-    private void deleteSelectedCustomApis() {
-        int[] selectedIndices = customApiList.getSelectedIndices();
-        if (selectedIndices.length == 0) {
-            JOptionPane.showMessageDialog(this, "请先选择要删除的接口", "提示", JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-
-        String message = selectedIndices.length == 1 ?
-                "确定要删除选中的接口吗？" :
-                String.format("确定要删除选中的 %d 个接口吗？", selectedIndices.length);
-
-        int confirm = JOptionPane.showConfirmDialog(this, message, "确认", JOptionPane.YES_NO_OPTION);
-        if (confirm == JOptionPane.YES_OPTION) {
-            // 从后往前删除，避免索引变化
-            for (int i = selectedIndices.length - 1; i >= 0; i--) {
-                customApiListModel.remove(selectedIndices[i]);
-            }
-            showCustomApiDetail(null);
-            persistCustomApiList();
-        }
-    }
-
-    /**
-     * 删除选中的自定义接口（单个删除，保留兼容性）
-     */
-    private void deleteSelectedCustomApi() {
-        int idx = customApiList.getSelectedIndex();
-        if (idx >= 0) {
-            int confirm = JOptionPane.showConfirmDialog(this, "确定要删除该接口吗？", "确认", JOptionPane.YES_NO_OPTION);
-            if (confirm == JOptionPane.YES_OPTION) {
-                customApiListModel.remove(idx);
-                showCustomApiDetail(null);
-                persistCustomApiList();
-            }
-        }
-    }
-
-    /**
-     * 持久化自定义接口列表
-     */
-    private void persistCustomApiList() {
-        ArrayList<CustomApiInfo> list = new ArrayList<>();
-        for (int i = 0; i < customApiListModel.size(); i++) {
-            list.add(customApiListModel.get(i));
-        }
-        CustomApiStorage.saveCustomApis(project, list);
-    }
 
     /**
      * 加载自定义接口列表
@@ -1389,141 +2128,126 @@ public class RequestManPanel extends JPanel {
         }
     }
 
-    // 工具方法：判断字符串是否为JSON
-    private boolean isJson(String text) {
-        if (text == null) {
-            return false;
-        }
-        String t = text.trim();
-        return (t.startsWith("{") && t.endsWith("}")) || (t.startsWith("[") && t.endsWith("]"));
-    }
-
-    // 工具方法：判断字符串是否为XML
-    private boolean isXml(String text) {
-        if (text == null) {
-            return false;
-        }
-        String t = text.trim();
-        return t.startsWith("<") && t.endsWith(">") && t.contains("<?xml");
-    }
-
-    /**
-     * 工具方法：安全获取EditableParamsPanel中的JTable实例
-     *
-     * @param panel EditableParamsPanel实例
-     * @return JTable对象，若获取失败返回null
-     */
-    private static JTable getTableFromEditableParamsPanel(Object panel) {
-        if (panel == null) {
-            return null;
-        }
-        try {
-            java.lang.reflect.Field tableField = panel.getClass().getDeclaredField("table");
-            tableField.setAccessible(true);
-            Object tableObj = tableField.get(panel);
-            if (tableObj instanceof JTable) {
-                return (JTable) tableObj;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    /**
-     * 工具方法：安全获取PostOpPanel中的JTable实例
-     *
-     * @param panel PostOpPanel实例
-     * @return JTable对象，若获取失败返回null
-     */
-    private static JTable getTableFromPostOpPanel(Object panel) {
-        if (panel == null) {
-            return null;
-        }
-        try {
-            java.lang.reflect.Field tableField = panel.getClass().getDeclaredField("table");
-            tableField.setAccessible(true);
-            Object tableObj = tableField.get(panel);
-            if (tableObj instanceof JTable) {
-                return (JTable) tableObj;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    /**
-     * 工具方法：安全获取HeadersPanel中的JTable实例
-     *
-     * @param panel HeadersPanel实例
-     * @return JTable对象，若获取失败返回null
-     */
-    private static JTable getTableFromHeadersPanel(HeadersPanel panel) {
-        if (panel == null) {
-            return null;
-        }
-        try {
-            java.lang.reflect.Field tableField = panel.getClass().getDeclaredField("table");
-            tableField.setAccessible(true);
-            Object tableObj = tableField.get(panel);
-            if (tableObj instanceof JTable) {
-                return (JTable) tableObj;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
-
-    /**
-     * 工具方法：安全获取CookiesPanel中的JTable实例
-     *
-     * @param panel CookiesPanel实例
-     * @return JTable对象，若获取失败返回null
-     */
-    private static JTable getTableFromCookiesPanel(CookiesPanel panel) {
-        if (panel == null) {
-            return null;
-        }
-        try {
-            java.lang.reflect.Field tableField = panel.getClass().getDeclaredField("table");
-            tableField.setAccessible(true);
-            Object tableObj = tableField.get(panel);
-            if (tableObj instanceof JTable) {
-                return (JTable) tableObj;
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
+    // 响应格式化相关方法已移至DefaultResponseHandler中
+    // 此处不再需要重复实现
 
     // --- 保证showCustomApiDetail能正常调用Tab构建方法 ---
     private JTabbedPane buildCustomEditTabs() {
-        JTabbedPane tabbedPane = new JTabbedPane();
-        customParamsPanel = new EditableParamsPanel(new ArrayList<>());
-        customBodyPanel = new EditableBodyPanel(new ArrayList<>());
-        HeadersPanel headersPanel = new HeadersPanel();
-        CookiesPanel cookiesPanel = new CookiesPanel();
+        // 创建各面板
+        customParamsPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.PARAMS, new ArrayList<>(), false, this::updateUrlFromPathParams);
+        customBodyPanel = new EditableBodyPanel(new ArrayList<>(), true);
+        customHeadersPanel = new HeadersPanel();
+        customCookiesPanel = new CookiesPanel();
         customAuthPanel = new AuthPanel();
+        customPreOpPanel = new PreOpPanel();
         customPostOpPanel = new PostOpPanel();
-        // 使用已创建的customPostOpPanel，而不是创建新实例
-        tabbedPane.addTab("Params", customParamsPanel);
-        tabbedPane.addTab("Body", customBodyPanel);
-        tabbedPane.addTab("Headers", headersPanel);
-        tabbedPane.addTab("Cookies", cookiesPanel);
-        tabbedPane.addTab("Auth", customAuthPanel);
-        tabbedPane.addTab("后置操作", customPostOpPanel);
 
+        // 仅UI拼装交由Builder，业务与监听仍在本方法中
+        CustomEditPanelsBuilder.CustomTabsComponents ctc = new CustomEditPanelsBuilder.CustomTabsComponents(this);
+        JTabbedPane tabbedPane = CustomEditPanelsBuilder.assembleCustomTabs(ctc);
+        // 为Cookie面板添加监听器
+        if (customCookiesPanel != null) {
+            if (customCookiesPanel.getTable() != null) {
+                autoSaveManager.addTableChangeListener(customCookiesPanel.getTable(), "cookie");
+            }
+        }
+        // 为认证面板添加监听器
+        if (customAuthPanel != null) {
+            JComboBox<?> authModeCombo = getAuthModeComboBox(customAuthPanel);
+            if (authModeCombo != null) {
+                autoSaveManager.addSelectionChangeListener(authModeCombo, "authMode");
+            }
+            JTextField authValueField = getAuthValueField(customAuthPanel);
+            if (authValueField != null) {
+                autoSaveManager.addTextChangeListener(authValueField, "authValue");
+            }
+        }
+        // 为请求体面板添加监听器
+        if (customBodyPanel != null) {
+            // 类型下拉框
+            JComboBox<String> typeComboBox = customBodyPanel.getTypeComboBox();
+            if (typeComboBox != null && typeComboBox.getSelectedItem() != null) {
+                autoSaveManager.addSelectionChangeListener(typeComboBox, "bodyType");
+            }
+
+            // 对于EditableBodyPanel，直接获取文本区域
+            if (customBodyPanel instanceof EditableBodyPanel) {
+                EditableBodyPanel editablePanel = (EditableBodyPanel) customBodyPanel;
+                // JSON文本区域
+                JTextArea jsonArea = editablePanel.getJsonTextArea();
+                if (jsonArea != null) {
+                    autoSaveManager.addTextChangeListener(jsonArea, "body");
+                }
+                // XML文本区域
+                JTextArea xmlArea = editablePanel.getXmlTextArea();
+                if (xmlArea != null) {
+                    autoSaveManager.addTextChangeListener(xmlArea, "body");
+                }
+            } else {
+                // 对于BodyPanel，使用原有的兼容性方法
+                JsonBodyPanel jsonPanel = customBodyPanel.getJsonBodyPanel();
+                if (jsonPanel != null && jsonPanel.getTextAreaRef() != null) {
+                    autoSaveManager.addTextChangeListener(jsonPanel.getTextAreaRef(), "body");
+                }
+                XmlBodyPanel xmlPanel = customBodyPanel.getXmlBodyPanel();
+                if (xmlPanel != null && xmlPanel.getTextAreaRef() != null) {
+                    autoSaveManager.addTextChangeListener(xmlPanel.getTextAreaRef(), "body");
+                }
+            }
+
+            // form-data表格
+            JTable formTable = getTableFromPanel(customBodyPanel, "formDataPanel");
+            if (formTable != null) {
+                autoSaveManager.addTableChangeListener(formTable, "bodyParams");
+            }
+            // urlencoded表格
+            JTable urlTable = getTableFromPanel(customBodyPanel, "urlencodedPanel");
+            if (urlTable != null) {
+                autoSaveManager.addTableChangeListener(urlTable, "bodyParams");
+            }
+        }
+        // 为前置操作面板添加监听器
+        if (customPreOpPanel != null) {
+            JTable preOpPanelTable = SwingUtils.getTable(customPreOpPanel);
+            if (preOpPanelTable != null) {
+                autoSaveManager.addTableChangeListener(preOpPanelTable, "preOp");
+            }
+        }
+        // 为头部面板添加监听器
+        if (customHeadersPanel != null) {
+            if (customHeadersPanel.getTable() != null) {
+                autoSaveManager.addTableChangeListener(customHeadersPanel.getTable(), "headers");
+            }
+        }
         // 设置响应面板引用，用于JSONPath提取器
         customPostOpPanel.setResponsePanel(responsePanel);
         // 自定义模式没有接口信息，使用默认响应定义
+
+        // 为tabbedPane添加ChangeListener，在切换tab之前先停止所有表格编辑
+        tabbedPane.addChangeListener(e -> {
+            // 获取切换前的Tab索引
+            int previousTabIndex = currentTabIndex;
+            // 获取切换后的Tab索引
+            int newTabIndex = tabbedPane.getSelectedIndex();
+
+            // 更新当前Tab索引
+            currentTabIndex = newTabIndex;
+
+            // 只停止离开的Tab中的表格编辑
+            stopTableEditingForTabIndex(previousTabIndex);
+
+            LogUtil.debug("自定义模式Tab切换: " + previousTabIndex + " -> " + newTabIndex);
+        });
 
         tabbedPane.setTabLayoutPolicy(JTabbedPane.WRAP_TAB_LAYOUT);
         return tabbedPane;
     }
 
     // --- 分体式发送按钮工具方法，返回包含主按钮和下拉按钮的JPanel ---
-    private JPanel buildSplitSendButton(java.util.function.Consumer<JButton> sendAction, java.util.function.Consumer<JButton> sendAndDownloadAction) {
-        JButton sendBtn = new JButton("发送");
-        JButton arrowBtn = new JButton("▼");
+    private JPanel buildSplitSendButton
+    (java.util.function.Consumer<JButton> sendAction, java.util.function.Consumer<JButton> sendAndDownloadAction) {
+        JButton sendBtn = new JButton(RequestManBundle.message("main.send"));
+        JButton arrowBtn = new JButton(RequestManBundle.message("main.dropdown.arrow"));
         int arc = 18;
         int btnHeight = 36;
         int btnWidth = 64;
@@ -1621,7 +2345,7 @@ public class RequestManPanel extends JPanel {
         });
         // 下拉菜单
         JPopupMenu menu = new JPopupMenu();
-        JMenuItem downloadItem = new JMenuItem("发送并下载");
+        JMenuItem downloadItem = new JMenuItem(RequestManBundle.message("main.send.and.download"));
         downloadItem.setFont(sendBtn.getFont());
         menu.add(downloadItem);
         // 事件绑定，传递按钮本身
@@ -1640,402 +2364,59 @@ public class RequestManPanel extends JPanel {
 
     // --- 发送逻辑提取 ---
     private void doSendCustomRequest(JButton btn) {
-        if (btn != null) {
-            btn.setEnabled(false);
-        }
-
         // 发送请求前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
-        if (customParamsPanel != null) {
-            JTable table = getTableFromEditableParamsPanel(customParamsPanel);
-            stopTableEditing(table);
-        }
-        if (customPostOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(customPostOpPanel);
-            stopTableEditing(table);
-        }
-        if (customBodyPanel != null) {
-            // form-data
-            JTable formTable = getTableFromEditableParamsPanel(customBodyPanel.getFormDataPanel());
-            stopTableEditing(formTable);
-            // x-www-form-urlencoded
-            JTable urlTable = getTableFromEditableParamsPanel(customBodyPanel.getUrlencodedPanel());
-            stopTableEditing(urlTable);
+        if (autoSaveManager != null) {
+            autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+        } else {
+            stopTableEditingForTabIndex(currentTabIndex);
         }
 
-        EXECUTOR.submit(() -> {
-            try {
-                String url = customUrlField.getText().trim();
-                String method = (String) customMethodBox.getSelectedItem();
-                java.util.List<ApiParam> params = customParamsPanel != null ? customParamsPanel.getParams() : new java.util.ArrayList<>();
-                String bodyType = customBodyPanel != null ? customBodyPanel.getBodyType() : "none";
-                java.util.List<ApiParam> bodyParams = new java.util.ArrayList<>();
-                String bodyContent = "";
-                byte[] binaryData = null;
-                if (customBodyPanel != null) {
-                    if ("json".equals(bodyType)) {
-                        bodyContent = customBodyPanel.getJsonBody();
-                    } else if ("xml".equals(bodyType)) {
-                        bodyContent = customBodyPanel.getXmlBody();
-                    } else if ("binary".equals(bodyType)) {
-                        // 对于binary类型，获取二进制数据
-                        binaryData = customBodyPanel.getBinaryBody();
-                    } else if ("form-data".equals(bodyType)) {
-                        bodyParams = customBodyPanel.getFormDataParams();
-                    } else if ("x-www-form-urlencoded".equals(bodyType)) {
-                        bodyParams = customBodyPanel.getUrlencodedParams();
-                    }
-                }
-                java.util.Map<String, String> headers = new java.util.HashMap<>();
-                java.util.Map<String, String> cookies = new java.util.HashMap<>();
-                String auth = "";
-                if (editingApi != null && editingApi.getAuthMode() == 0) {
-                    auth = ProjectSettingsManager.getCurrentEnvironmentGlobalAuth(project);
-                } else if (editingApi != null) {
-                    auth = editingApi.getAuthValue();
-                }
-                java.util.List<PostOpItem> postOps = customPostOpPanel != null ? customPostOpPanel.getPostOpData() : new java.util.ArrayList<>();
-                String urlPrefix = ProjectSettingsManager.getCurrentEnvironmentPreUrl(project);
-                try (HttpResponse response = RequestSender.sendRequestRaw(
-                        project, url, method, params, bodyType, bodyParams, bodyContent, binaryData, headers, cookies, auth, urlPrefix, postOps
-                )) {
-                    int status = response.getStatus();
-                    String statusMsg = "HTTP状态: " + status + (status == 200 ? "（成功）" : "（失败）");
-                    String respText = response.body();
-                    String finalDisplayText = formatResponseText(respText);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        responsePanel.setStatusText(statusMsg);
-                        responsePanel.setResponseText(finalDisplayText);
-                        responsePanel.expand();
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                }
-            } catch (Exception ex) {
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    responsePanel.setStatusText("");
-                    responsePanel.setResponseText("请求异常：" + ex.getMessage());
-                    responsePanel.expand();
-                    if (btn != null) {
-                        btn.setEnabled(true);
-                    }
-                });
-            }
-        });
+        // 使用RequestSenderManager发送请求
+        DefaultResponseHandler responseHandler = new DefaultResponseHandler(btn, responsePanel);
+        RequestSenderManager.sendCustomRequest(project, editingApi, customUrlField, customMethodBox,
+                customParamsPanel, customBodyPanel, customPostOpPanel, customAuthPanel, responseHandler);
     }
 
     private void doSendScanRequest(JButton btn, ApiInfo apiInfo) {
-        if (btn != null) {
-            btn.setEnabled(false);
-        }
-
         // 发送请求前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
-        if (headersPanel != null) {
-            JTable table = getTableFromHeadersPanel(headersPanel);
-            stopTableEditing(table);
-        }
-        if (cookiesPanel != null) {
-            JTable table = getTableFromCookiesPanel(cookiesPanel);
-            stopTableEditing(table);
-        }
-        if (postOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(postOpPanel);
-            stopTableEditing(table);
+        if (autoSaveManager != null) {
+            autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+        } else {
+            stopTableEditingForTabIndex(currentTabIndex);
         }
 
-        EXECUTOR.submit(() -> {
-            try {
-                String url = apiInfo.getUrl();
-                String method = apiInfo.getHttpMethod();
-                java.util.List<ApiParam> params = paramsPanel != null ? paramsPanel.getParams() : new java.util.ArrayList<>();
-                String bodyType = bodyPanel != null ? bodyPanel.getBodyType() : "none";
-                java.util.List<ApiParam> bodyParams = bodyPanel != null ? bodyPanel.getBodyParams() : new java.util.ArrayList<>();
-                String bodyContent = bodyPanel != null ? bodyPanel.getBodyContent() : "";
-                byte[] binaryData = "binary".equals(bodyType) && bodyPanel != null ? bodyPanel.getBinaryData() : null;
-                java.util.Map<String, String> headers = headersPanel != null ? headersPanel.getHeadersMap() : new java.util.HashMap<>();
-                java.util.Map<String, String> cookies = cookiesPanel != null ? cookiesPanel.getCookiesMap() : new java.util.HashMap<>();
-                String auth = "";
-                if (authPanel != null && authPanel.getAuthMode() == 0) {
-                    auth = ProjectSettingsManager.getCurrentEnvironmentGlobalAuth(project);
-                } else if (authPanel != null) {
-                    auth = authPanel.getAuthValue();
-                }
-                java.util.List<PostOpItem> postOps = postOpPanel != null ? postOpPanel.getPostOpData() : new java.util.ArrayList<>();
-                String urlPrefix = ProjectSettingsManager.getCurrentEnvironmentPreUrl(project);
-                try (HttpResponse response = RequestSender.sendRequestRaw(
-                        project, url, method, params, bodyType, bodyParams, bodyContent, binaryData, headers, cookies, auth, urlPrefix, postOps
-                )) {
-                    int status = response.getStatus();
-                    String statusMsg = "HTTP状态: " + status + (status == 200 ? "（成功）" : "（失败）");
-                    String respText = response.body();
-                    String finalDisplayText = formatResponseText(respText);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        responsePanel.setStatusText(statusMsg);
-                        responsePanel.setResponseText(finalDisplayText);
-                        responsePanel.expand();
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                }
-            } catch (Exception ex) {
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    javax.swing.JOptionPane.showMessageDialog(customEditPanel, "请求异常: " + ex.getMessage(), "错误", javax.swing.JOptionPane.ERROR_MESSAGE);
-                    if (btn != null) {
-                        btn.setEnabled(true);
-                    }
-                });
-            }
-        });
+        // 使用RequestSenderManager发送请求
+        DefaultResponseHandler responseHandler = new DefaultResponseHandler(btn, responsePanel);
+        RequestSenderManager.sendScanRequest(project, apiInfo, paramsPanel, bodyPanel,
+                headersPanel, cookiesPanel, authPanel, postOpPanel, responseHandler);
     }
 
     private void doSendAndDownloadCustom(JButton btn) {
-        if (btn != null) {
-            btn.setEnabled(false);
-        }
-
         // 发送请求前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
-        if (customParamsPanel != null) {
-            JTable table = getTableFromEditableParamsPanel(customParamsPanel);
-            stopTableEditing(table);
-        }
-        if (customPostOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(customPostOpPanel);
-            stopTableEditing(table);
-        }
-        if (customBodyPanel != null) {
-            // form-data
-            JTable formTable = getTableFromEditableParamsPanel(customBodyPanel.getFormDataPanel());
-            stopTableEditing(formTable);
-            // x-www-form-urlencoded
-            JTable urlTable = getTableFromEditableParamsPanel(customBodyPanel.getUrlencodedPanel());
-            stopTableEditing(urlTable);
+        if (autoSaveManager != null) {
+            autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+        } else {
+            stopTableEditingForTabIndex(currentTabIndex);
         }
 
-        EXECUTOR.submit(() -> {
-            try {
-                String url = customUrlField.getText().trim();
-                String method = (String) customMethodBox.getSelectedItem();
-                java.util.List<ApiParam> params = customParamsPanel != null ? customParamsPanel.getParams() : new java.util.ArrayList<>();
-                String bodyType = customBodyPanel != null ? customBodyPanel.getBodyType() : "none";
-                java.util.List<ApiParam> bodyParams = new java.util.ArrayList<>();
-                String bodyContent = "";
-                byte[] binaryData = null;
-                if (customBodyPanel != null) {
-                    if ("json".equals(bodyType)) {
-                        bodyContent = customBodyPanel.getJsonBody();
-                    } else if ("xml".equals(bodyType)) {
-                        bodyContent = customBodyPanel.getXmlBody();
-                    } else if ("binary".equals(bodyType)) {
-                        // 对于binary类型，获取二进制数据
-                        binaryData = customBodyPanel.getBinaryBody();
-                    } else if ("form-data".equals(bodyType)) {
-                        bodyParams = customBodyPanel.getFormDataParams();
-                    } else if ("x-www-form-urlencoded".equals(bodyType)) {
-                        bodyParams = customBodyPanel.getUrlencodedParams();
-                    }
-                }
-                java.util.Map<String, String> headers = new java.util.HashMap<>();
-                java.util.Map<String, String> cookies = new java.util.HashMap<>();
-                String auth = "";
-                if (editingApi != null && editingApi.getAuthMode() == 0) {
-                    auth = ProjectSettingsManager.getCurrentEnvironmentGlobalAuth(project);
-                } else if (editingApi != null) {
-                    auth = editingApi.getAuthValue();
-                }
-                java.util.List<PostOpItem> postOps = postOpPanel != null ? postOpPanel.getPostOpData() : new java.util.ArrayList<>();
-                String urlPrefix = ProjectSettingsManager.getCurrentEnvironmentPreUrl(project);
-                try (HttpResponse response = RequestSender.sendRequestRaw(
-                        project, url, method, params, bodyType, bodyParams, bodyContent, binaryData, headers, cookies, auth, urlPrefix, postOps
-                )) {
-                    int status = response.getStatus();
-                    String statusMsg = "HTTP状态: " + status + (status == 200 ? "（成功）" : "（失败）");
-                    String respText = response.body();
-                    String finalDisplayText = formatResponseText(respText);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        responsePanel.setStatusText(statusMsg);
-                        responsePanel.setResponseText(finalDisplayText);
-                        responsePanel.expand();
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                    String contentType = response.header("Content-Type");
-                    byte[] bytes = response.bodyBytes();
-                    String ext = suggestFileExtension(contentType, bytes);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        javax.swing.JFileChooser fileChooser = new javax.swing.JFileChooser();
-                        fileChooser.setDialogTitle("请选择保存文件的位置");
-                        fileChooser.setSelectedFile(new java.io.File("response" + ext));
-                        int userSelection = fileChooser.showSaveDialog(customEditPanel);
-                        if (userSelection == javax.swing.JFileChooser.APPROVE_OPTION) {
-                            java.io.File fileToSave = fileChooser.getSelectedFile();
-                            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(fileToSave)) {
-                                fos.write(bytes);
-                                fos.flush();
-                                javax.swing.JOptionPane.showMessageDialog(customEditPanel, "文件已保存: " + fileToSave.getAbsolutePath());
-                            } catch (Exception ex) {
-                                javax.swing.JOptionPane.showMessageDialog(customEditPanel, "保存文件失败: " + ex.getMessage(), "错误", javax.swing.JOptionPane.ERROR_MESSAGE);
-                            }
-                        }
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                }
-            } catch (Exception ex) {
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    javax.swing.JOptionPane.showMessageDialog(customEditPanel, "请求异常: " + ex.getMessage(), "错误", javax.swing.JOptionPane.ERROR_MESSAGE);
-                    if (btn != null) {
-                        btn.setEnabled(true);
-                    }
-                });
-            }
-        });
+        // 使用RequestSenderManager发送请求并下载响应
+        DefaultResponseHandler responseHandler = new DefaultResponseHandler(btn, responsePanel);
+        RequestSenderManager.sendCustomRequestAndDownload(project, editingApi, customUrlField, customMethodBox,
+                customParamsPanel, customBodyPanel, customPostOpPanel, customAuthPanel, responseHandler);
     }
 
     private void doSendAndDownloadScan(JButton btn, ApiInfo apiInfo) {
-        if (btn != null) {
-            btn.setEnabled(false);
-        }
-
         // 发送请求前，主动结束所有相关表格的编辑，确保编辑内容写入TableModel，避免数据丢失
-        if (headersPanel != null) {
-            JTable table = getTableFromHeadersPanel(headersPanel);
-            stopTableEditing(table);
-        }
-        if (cookiesPanel != null) {
-            JTable table = getTableFromCookiesPanel(cookiesPanel);
-            stopTableEditing(table);
-        }
-        if (postOpPanel != null) {
-            JTable table = getTableFromPostOpPanel(postOpPanel);
-            stopTableEditing(table);
+        if (autoSaveManager != null) {
+            autoSaveManager.runWithImmediateTableUpdate(() -> stopTableEditingForTabIndex(currentTabIndex));
+        } else {
+            stopTableEditingForTabIndex(currentTabIndex);
         }
 
-        EXECUTOR.submit(() -> {
-            try {
-                String url = apiInfo.getUrl();
-                String method = apiInfo.getHttpMethod();
-                java.util.List<ApiParam> params = paramsPanel != null ? paramsPanel.getParams() : new java.util.ArrayList<>();
-                String bodyType = bodyPanel != null ? bodyPanel.getBodyType() : "none";
-                java.util.List<ApiParam> bodyParams = bodyPanel != null ? bodyPanel.getBodyParams() : new java.util.ArrayList<>();
-                String bodyContent = bodyPanel != null ? bodyPanel.getBodyContent() : "";
-                byte[] binaryData = "binary".equals(bodyType) && bodyPanel != null ? bodyPanel.getBinaryData() : null;
-                java.util.Map<String, String> headers = headersPanel != null ? headersPanel.getHeadersMap() : new java.util.HashMap<>();
-                java.util.Map<String, String> cookies = cookiesPanel != null ? cookiesPanel.getCookiesMap() : new java.util.HashMap<>();
-                String auth = "";
-                if (authPanel != null && authPanel.getAuthMode() == 0) {
-                    auth = ProjectSettingsManager.getCurrentEnvironmentGlobalAuth(project);
-                } else if (authPanel != null) {
-                    auth = authPanel.getAuthValue();
-                }
-                java.util.List<PostOpItem> postOps = postOpPanel != null ? postOpPanel.getPostOpData() : new java.util.ArrayList<>();
-                String urlPrefix = ProjectSettingsManager.getCurrentEnvironmentPreUrl(project);
-                try (HttpResponse response = RequestSender.sendRequestRaw(
-                        project, url, method, params, bodyType, bodyParams, bodyContent, binaryData, headers, cookies, auth, urlPrefix, postOps
-                )) {
-                    int status = response.getStatus();
-                    String statusMsg = "HTTP状态: " + status + (status == 200 ? "（成功）" : "（失败）");
-                    String respText = response.body();
-                    String finalDisplayText = formatResponseText(respText);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        responsePanel.setStatusText(statusMsg);
-                        responsePanel.setResponseText(finalDisplayText);
-                        responsePanel.expand();
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                    String contentType = response.header("Content-Type");
-                    byte[] bytes = response.bodyBytes();
-                    String ext = suggestFileExtension(contentType, bytes);
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        javax.swing.JFileChooser fileChooser = new javax.swing.JFileChooser();
-                        fileChooser.setDialogTitle("请选择保存文件的位置");
-                        fileChooser.setSelectedFile(new java.io.File("response" + ext));
-                        int userSelection = fileChooser.showSaveDialog(responsePanel);
-                        if (userSelection == javax.swing.JFileChooser.APPROVE_OPTION) {
-                            java.io.File fileToSave = fileChooser.getSelectedFile();
-                            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(fileToSave)) {
-                                fos.write(bytes);
-                                fos.flush();
-                                javax.swing.JOptionPane.showMessageDialog(responsePanel, "文件已保存: " + fileToSave.getAbsolutePath());
-                            } catch (Exception ex) {
-                                javax.swing.JOptionPane.showMessageDialog(responsePanel, "保存文件失败: " + ex.getMessage(), "错误", javax.swing.JOptionPane.ERROR_MESSAGE);
-                            }
-                        }
-                        if (btn != null) {
-                            btn.setEnabled(true);
-                        }
-                    });
-                }
-            } catch (Exception ex) {
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    javax.swing.JOptionPane.showMessageDialog(responsePanel, "请求异常: " + ex.getMessage(), "错误", javax.swing.JOptionPane.ERROR_MESSAGE);
-                    if (btn != null) {
-                        btn.setEnabled(true);
-                    }
-                });
-            }
-        });
-    }
-
-    // --- 文件扩展名建议工具方法 ---
-    private String suggestFileExtension(String contentType, byte[] bytes) {
-        if (contentType == null) {
-            return ".bin";
-        }
-        String ct = contentType.toLowerCase();
-        if (ct.contains("json")) {
-            return ".json";
-        }
-        if (ct.contains("xml")) {
-            return ".xml";
-        }
-        if (ct.contains("html")) {
-            return ".html";
-        }
-        if (ct.contains("csv")) {
-            return ".csv";
-        }
-        if (ct.contains("plain")) {
-            return ".txt";
-        }
-        if (ct.contains("zip")) {
-            return ".zip";
-        }
-        if (ct.contains("pdf")) {
-            return ".pdf";
-        }
-        if (ct.contains("msword")) {
-            return ".doc";
-        }
-        if (ct.contains("officedocument.spreadsheet")) {
-            return ".xlsx";
-        }
-        if (ct.contains("officedocument.wordprocessingml")) {
-            return ".docx";
-        }
-        if (ct.contains("officedocument.presentationml")) {
-            return ".pptx";
-        }
-        if (ct.contains("excel")) {
-            return ".xls";
-        }
-        if (ct.contains("image/png")) {
-            return ".png";
-        }
-        if (ct.contains("image/jpeg")) {
-            return ".jpg";
-        }
-        if (ct.contains("image/gif")) {
-            return ".gif";
-        }
-        if (ct.contains("image/")) {
-            return ".img";
-        }
-        return ".bin";
+        // 使用RequestSenderManager发送请求并下载响应
+        DefaultResponseHandler responseHandler = new DefaultResponseHandler(btn, responsePanel);
+        RequestSenderManager.sendScanRequestAndDownload(project, apiInfo, paramsPanel, bodyPanel,
+                headersPanel, cookiesPanel, authPanel, postOpPanel, responseHandler);
     }
 
     // 新增：表格主动结束编辑的工具方法
@@ -2069,8 +2450,8 @@ public class RequestManPanel extends JPanel {
             boolean monitoringEnabled = PropertiesComponent.getInstance().getBoolean("requestman.performanceMonitoring", false);
             if (!monitoringEnabled) {
                 JOptionPane.showMessageDialog(this,
-                        "性能监控未启用。请在设置页面启用性能监控后查看报告。",
-                        "提示",
+                        RequestManBundle.message("main.performance.not.enabled"),
+                        RequestManBundle.message("main.performance.tip"),
                         JOptionPane.INFORMATION_MESSAGE);
                 return;
             }
@@ -2095,9 +2476,9 @@ public class RequestManPanel extends JPanel {
 
             // 创建按钮面板
             JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-            JButton closeButton = new JButton("关闭");
-            JButton clearButton = new JButton("清除统计数据");
-            JButton refreshButton = new JButton("刷新");
+            JButton closeButton = new JButton(RequestManBundle.message("main.performance.close"));
+            JButton clearButton = new JButton(RequestManBundle.message("main.performance.clear"));
+            JButton refreshButton = new JButton(RequestManBundle.message("main.performance.refresh"));
 
             closeButton.addActionListener(e -> dialog.dispose());
             clearButton.addActionListener(e -> {
@@ -2124,43 +2505,16 @@ public class RequestManPanel extends JPanel {
 
         } catch (Exception e) {
             JOptionPane.showMessageDialog(this,
-                    "获取性能报告失败: " + e.getMessage(),
-                    "错误",
+                    RequestManBundle.message("main.performance.get.fail") + e.getMessage(),
+                    RequestManBundle.message("common.error"),
                     JOptionPane.ERROR_MESSAGE);
         }
     }
 
     /**
-     * 格式化响应内容，支持JSON/XML/HTML美化
+     * 响应格式化功能已移至DefaultResponseHandler中
+     * 此处不再需要重复实现
      */
-    private String formatResponseText(String text) {
-        if (isJson(text)) {
-            try {
-                return cn.hutool.json.JSONUtil.formatJsonStr(text);
-            } catch (Exception ignore) {
-            }
-        } else if (isXml(text)) {
-            try {
-                return cn.hutool.core.util.XmlUtil.format(text);
-            } catch (Exception ignore) {
-            }
-        } else if (isHtml(text)) {
-            try {
-                return org.jsoup.Jsoup.parse(text).outerHtml();
-            } catch (Exception ignore) {
-            }
-        }
-        return text;
-    }
-
-    // 工具方法：判断字符串是否为HTML
-    private boolean isHtml(String text) {
-        if (text == null) {
-            return false;
-        }
-        String t = text.trim().toLowerCase();
-        return t.startsWith("<!doctype html") || t.startsWith("<html");
-    }
 
     /**
      * 刷新性能监控按钮的显示状态
@@ -2180,9 +2534,276 @@ public class RequestManPanel extends JPanel {
     }
 
     /**
+     * 更新自动保存设置
+     */
+    public void updateAutoSaveSetting() {
+        if (autoSaveManager != null) {
+            autoSaveManager.updateAutoSaveSetting();
+        }
+    }
+
+    /**
      * 查找指定项目的RequestManPanel实例
      */
     public static RequestManPanel findRequestManPanel(Project project) {
         return instances.get(project);
+    }
+
+
+    /**
+     * 从Panel获取表格
+     */
+    private static JTable getTableFromPanel(Object panel, String tableName) {
+        Object paramsPanel = SwingUtils.getObject(panel, tableName);
+        if (paramsPanel == null) {
+            return null;
+        }
+        return SwingUtils.getTable(paramsPanel);
+    }
+
+
+    /**
+     * 从BodyPanel获取JSON文本区域
+     */
+    private static JTextArea getJsonAreaFromBodyPanel(BodyPanel panel) {
+        try {
+            java.lang.reflect.Field jsonAreaField = BodyPanel.class.getDeclaredField("jsonArea");
+            jsonAreaField.setAccessible(true);
+            return (JTextArea) jsonAreaField.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从EditableBodyPanel获取JSON文本区域
+     */
+    private static JTextArea getJsonAreaFromBodyPanel(EditableBodyPanel panel) {
+        try {
+            java.lang.reflect.Field jsonAreaField = EditableBodyPanel.class.getDeclaredField("jsonArea");
+            jsonAreaField.setAccessible(true);
+            return (JTextArea) jsonAreaField.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从BodyPanel获取XML文本区域
+     */
+    private static JTextArea getXmlAreaFromBodyPanel(BodyPanel panel) {
+        try {
+            java.lang.reflect.Field xmlAreaField = BodyPanel.class.getDeclaredField("xmlArea");
+            xmlAreaField.setAccessible(true);
+            return (JTextArea) xmlAreaField.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从EditableBodyPanel获取XML文本区域
+     */
+    private static JTextArea getXmlAreaFromBodyPanel(EditableBodyPanel panel) {
+        try {
+            java.lang.reflect.Field xmlAreaField = EditableBodyPanel.class.getDeclaredField("xmlArea");
+            xmlAreaField.setAccessible(true);
+            return (JTextArea) xmlAreaField.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从AuthPanel获取认证模式下拉框
+     */
+    private static JComboBox<?> getAuthModeComboBox(AuthPanel panel) {
+        try {
+            java.lang.reflect.Field comboField = AuthPanel.class.getDeclaredField("modeBox");
+            comboField.setAccessible(true);
+            return (JComboBox<?>) comboField.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 从AuthPanel获取认证值文本字段
+     */
+    private static JTextField getAuthValueField(AuthPanel panel) {
+        try {
+            java.lang.reflect.Field field = AuthPanel.class.getDeclaredField("authField");
+            field.setAccessible(true);
+            return (JTextField) field.get(panel);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 设置拖拽支持，允许用户通过拖拽重新排序自定义接口列表
+     */
+    private void setupDragAndDropSupport() {
+        customApiList.setTransferHandler(new TransferHandler() {
+            @Override
+            public int getSourceActions(JComponent c) {
+                return MOVE;
+            }
+
+            @Override
+            protected Transferable createTransferable(JComponent c) {
+                dragIndex = customApiList.getSelectedIndex();
+                if (dragIndex < 0) {
+                    return null;
+                }
+                return new CustomApiTransferable(customApiListModel.get(dragIndex));
+            }
+
+            @Override
+            public boolean canImport(TransferSupport support) {
+                boolean ok = support.isDrop()
+                        && support.isDataFlavorSupported(CustomApiTransferable.CUSTOM_API_FLAVOR);
+                if (ok) {
+                    try {
+                        JList.DropLocation dl = (JList.DropLocation) support.getDropLocation();
+                        int newIndex = dl.getIndex();
+                        boolean newInsert = dl.isInsert();
+                        if (newIndex != dropLineIndex || newInsert != dropInsert) {
+                            dropLineIndex = newIndex;
+                            dropInsert = newInsert;
+                            customApiList.repaint();
+                        }
+                    } catch (Exception ignore) {
+                    }
+                }
+                return ok;
+            }
+
+            @Override
+            public boolean importData(TransferSupport support) {
+                if (!canImport(support)) {
+                    return false;
+                }
+                try {
+                    CustomApiInfo dragged = (CustomApiInfo) support.getTransferable()
+                            .getTransferData(CustomApiTransferable.CUSTOM_API_FLAVOR);
+
+                    JList.DropLocation dl = (JList.DropLocation) support.getDropLocation();
+                    int dropIndex = dl.getIndex();
+                    dropInsert = dl.isInsert();
+                    if (dropIndex < 0) {
+                        dropIndex = customApiListModel.getSize();
+                    }
+
+                    // 同列表内移动：先删后插，向下移动做索引补偿
+                    if (dragIndex >= 0 && dragIndex < customApiListModel.getSize()) {
+                        if (dropIndex > dragIndex) {
+                            dropIndex--; // 补偿
+                        }
+                        customApiListModel.remove(dragIndex);
+                    }
+                    if (dropIndex < 0) {
+                        dropIndex = 0;
+                    }
+                    if (dropIndex > customApiListModel.getSize()) {
+                        dropIndex = customApiListModel.getSize();
+                    }
+
+                    customApiListModel.add(dropIndex, dragged);
+                    customApiList.setSelectedIndex(dropIndex);
+
+                    // 防抖持久化
+                    if (persistDebounce != null) {
+                        persistDebounce.restart();
+                    } else {
+                        CustomApiStorage.persistCustomApiList(project, customApiListModel);
+                    }
+                    // 重置分割线状态
+                    dropLineIndex = -1;
+                    dropInsert = true;
+                    customApiList.repaint();
+                    return true;
+                } catch (Exception ex) {
+                    LogUtil.warn("拖拽导入失败: " + ex.getMessage());
+                    return false;
+                } finally {
+                    dragIndex = -1;
+                }
+            }
+
+            @Override
+            protected void exportDone(JComponent c, Transferable data, int action) {
+                // 列表内重排已在 importData 完成，这里不做删除/持久化，避免重复
+                dragIndex = -1;
+                dropLineIndex = -1;
+                dropInsert = true;
+                customApiList.repaint();
+            }
+        });
+    }
+
+
+    public ParamsTablePanel getParamsPanel() {
+        return paramsPanel;
+    }
+
+    public BodyPanel getBodyPanel() {
+        return bodyPanel;
+    }
+
+    public HeadersPanel getHeadersPanel() {
+        return headersPanel;
+    }
+
+    public CookiesPanel getCookiesPanel() {
+        return cookiesPanel;
+    }
+
+    public AuthPanel getAuthPanel() {
+        return authPanel;
+    }
+
+    public PreOpPanel getPreOpPanel() {
+        return preOpPanel;
+    }
+
+    public PostOpPanel getPostOpPanel() {
+        return postOpPanel;
+    }
+
+    public EditableBodyPanel getCustomBodyPanel() {
+        return customBodyPanel;
+    }
+
+    public HeadersPanel getCustomHeadersPanel() {
+        return customHeadersPanel;
+    }
+
+    public CookiesPanel getCustomCookiesPanel() {
+        return customCookiesPanel;
+    }
+
+    public PreOpPanel getCustomPreOpPanel() {
+        return customPreOpPanel;
+    }
+
+    public PostOpPanel getCustomPostOpPanel() {
+        return customPostOpPanel;
+    }
+
+    public ParamsTablePanel getCustomParamsPanel() {
+        return customParamsPanel;
+    }
+
+    public JList<CustomApiInfo> getCustomApiList() {
+        return customApiList;
+    }
+
+    public DefaultListModel<CustomApiInfo> getCustomApiListModel() {
+        return customApiListModel;
+    }
+
+    public AuthPanel getCustomAuthPanel() {
+        return customAuthPanel;
     }
 }

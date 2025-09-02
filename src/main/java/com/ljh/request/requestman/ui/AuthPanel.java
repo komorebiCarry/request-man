@@ -2,6 +2,7 @@ package com.ljh.request.requestman.ui;
 
 import javax.swing.*;
 import java.awt.*;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 
 /**
@@ -16,21 +17,21 @@ public class AuthPanel extends JPanel {
      */
     private final JTextField authField;
     private JComboBox<String> modeBox;
-    private static final String[] MODE_OPTIONS = {"继承", "自定义"};
+    private static final String[] MODE_OPTIONS = {RequestManBundle.message("auth.inherit"), RequestManBundle.message("auth.custom")};
     private String globalAuthValue = "";
 
     public AuthPanel() {
         super(new BorderLayout());
         JPanel topPanel = new JPanel(new BorderLayout());
         modeBox = new JComboBox<>(MODE_OPTIONS);
-        JLabel label = new JLabel("认证信息：");
+        JLabel label = new JLabel(RequestManBundle.message("auth.info") + "：");
         authField = new JTextField();
-        authField.setToolTipText("支持变量格式，如 {{token}}，可直接输入文本或变量");
+        authField.setToolTipText(RequestManBundle.message("auth.tooltip"));
         topPanel.add(label, BorderLayout.WEST);
         topPanel.add(modeBox, BorderLayout.CENTER);
         add(topPanel, BorderLayout.NORTH);
         add(authField, BorderLayout.CENTER);
-        JLabel tip = new JLabel("支持变量格式，如 {{token}}，可直接输入文本或变量");
+        JLabel tip = new JLabel(RequestManBundle.message("auth.tooltip"));
         tip.setFont(new Font(null, Font.ITALIC, 12));
         tip.setForeground(new Color(120, 120, 120));
         add(tip, BorderLayout.SOUTH);

@@ -9,6 +9,7 @@ import com.ljh.request.requestman.enums.ParamDataType;
 import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.model.ApiParam;
 import com.ljh.request.requestman.util.ProjectUtils;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import java.awt.*;
@@ -33,7 +34,7 @@ public class PreviewDocPanel extends JPanel {
         textArea.setLineWrap(false);
         JScrollPane scrollPane = new JScrollPane(textArea);
         add(scrollPane, BorderLayout.CENTER);
-        copyBtn = new JButton("一键复制");
+        copyBtn = new JButton(RequestManBundle.message("preview.copy"));
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         btnPanel.add(copyBtn);
         add(btnPanel, BorderLayout.SOUTH);
@@ -48,7 +49,7 @@ public class PreviewDocPanel extends JPanel {
             Project project = ProjectUtils.getCurrentProject();
             new Notification(
                     "RequestMan", // groupDisplayId，可自定义
-                    "复制成功",
+                    RequestManBundle.message("preview.copy.success"),
                     "",
                     NotificationType.INFORMATION
             ).notify(project);
@@ -62,10 +63,10 @@ public class PreviewDocPanel extends JPanel {
         StringBuilder sb = new StringBuilder();
         // 接口名称优先显示description，无则方法名
         String displayName = (apiInfo.getDescription() != null && !apiInfo.getDescription().isEmpty()) ? apiInfo.getDescription() : apiInfo.getMethodName();
-        sb.append("【接口名称】\n").append(displayName).append("\n\n");
-        sb.append("【接口URL】\n").append(apiInfo.getHttpMethod()).append(": ").append(apiInfo.getUrl()).append("\n\n");
+        sb.append(RequestManBundle.message("preview.doc.api.name")).append("\n").append(displayName).append("\n\n");
+        sb.append(RequestManBundle.message("preview.doc.api.url")).append("\n").append(apiInfo.getHttpMethod()).append(": ").append(apiInfo.getUrl()).append("\n\n");
         if (pathParams != null && !pathParams.isEmpty()) {
-            sb.append("【Path 参数】\n");
+            sb.append(RequestManBundle.message("preview.doc.path.params")).append("\n");
             for (ApiParam p : pathParams) {
                 sb.append(p.getName());
                 String desc = getDesc(p);
@@ -77,7 +78,7 @@ public class PreviewDocPanel extends JPanel {
             sb.append("\n");
         }
         if (queryParams != null && !queryParams.isEmpty()) {
-            sb.append("【Query 参数】\n");
+            sb.append(RequestManBundle.message("preview.doc.query.params")).append("\n");
             for (ApiParam p : queryParams) {
                 sb.append(p.getName());
                 String desc = getDesc(p);
@@ -88,8 +89,8 @@ public class PreviewDocPanel extends JPanel {
             }
             sb.append("\n");
         }
-        sb.append("【Body 参数】\n");
-        sb.append("ContentType： ").append(contentType.getValue()).append("\n\n");
+        sb.append(RequestManBundle.message("preview.doc.body.params")).append("\n");
+        sb.append(RequestManBundle.message("preview.doc.contenttype")).append(" ").append(contentType.getValue()).append("\n\n");
         // Body参数展示，单一对象时直接展开children
         List<ApiParam> showParams = bodyParams;
         boolean isArray = false;
@@ -119,7 +120,7 @@ public class PreviewDocPanel extends JPanel {
         } else {
             sb.append("--\n\n");
         }
-        sb.append("【返回响应】\n");
+        sb.append(RequestManBundle.message("preview.doc.response")).append("\n");
         if (apiInfo.getResponseParams() != null && !apiInfo.getResponseParams().isEmpty()) {
             sb.append(genJsonWithComment(apiInfo.getResponseParams(), 0)).append("\n");
         } else {
@@ -175,8 +176,8 @@ public class PreviewDocPanel extends JPanel {
     private String genFormTable(List<ApiParam> params, int level) {
         StringBuilder sb = new StringBuilder();
         if (level == 0) {
-            sb.append(String.format("%-20s %-10s %-10s %s\n", "字段", "类型", "参考值", "注释"));
-            sb.append("-------------------------------------------------------------\n");
+            sb.append(String.format("%-20s %-10s %-10s %s\n", RequestManBundle.message("preview.doc.table.field"), RequestManBundle.message("preview.doc.table.type"), RequestManBundle.message("preview.doc.table.ref"), RequestManBundle.message("preview.doc.table.comment")));
+            sb.append(RequestManBundle.message("preview.doc.table.separator")).append("\n");
         }
         if (params == null) return sb.toString();
         for (ApiParam p : params) {
@@ -207,9 +208,9 @@ public class PreviewDocPanel extends JPanel {
         for (String line : lines) {
             sb.append(line);
             // 可扩展：如需自动注释，可结合响应结构模型
-            if (line.contains("\"code\"")) sb.append(" // 状态码");
-            if (line.contains("\"message\"")) sb.append(" // 提示信息");
-            if (line.contains("\"data\"")) sb.append(" // 数据体");
+            if (line.contains("\"code\"")) sb.append(" // ").append(RequestManBundle.message("preview.doc.response.code"));
+            if (line.contains("\"message\"")) sb.append(" // ").append(RequestManBundle.message("preview.doc.response.message"));
+            if (line.contains("\"data\"")) sb.append(" // ").append(RequestManBundle.message("preview.doc.response.data"));
             sb.append("\n");
         }
         return sb.toString();
@@ -219,7 +220,47 @@ public class PreviewDocPanel extends JPanel {
      * 获取注释，优先Swagger注解，无则JavaDoc，无注释时返回空字符串
      */
     private String getDesc(ApiParam p) {
-        return (p.getDescription() != null && !p.getDescription().isEmpty()) ? p.getDescription() : "";
+        StringBuilder desc = new StringBuilder();
+        if (p.getDescription() != null && !p.getDescription().isEmpty()) {
+            desc.append(p.getDescription());
+        }
+        
+        // 如果是递归字段，添加递归标识
+        if (p.isRecursive()) {
+            if (desc.length() > 0) {
+                desc.append(" ");
+            }
+            // 获取递归目标类名
+            String recursiveTarget = getRecursiveTarget(p);
+            if (recursiveTarget != null) {
+                desc.append("[").append(RequestManBundle.message("preview.doc.recursive")).append(recursiveTarget).append("]");
+            } else {
+                desc.append("[").append(RequestManBundle.message("preview.doc.recursive")).append("]");
+            }
+        }
+        
+        return desc.toString();
+    }
+
+    /**
+     * 获取递归目标类名
+     */
+    private String getRecursiveTarget(ApiParam p) {
+        // 如果字段有子参数，从子参数中获取类型信息
+        if (p.getChildren() != null && !p.getChildren().isEmpty()) {
+            // 取第一个子参数的类型作为递归目标
+            ApiParam firstChild = p.getChildren().get(0);
+            if (firstChild.getRawType() != null) {
+                return firstChild.getRawType();
+            }
+        }
+        
+        // 如果没有子参数，尝试从字段类型推断
+        if (p.getRawType() != null) {
+            return p.getRawType();
+        }
+        
+        return null;
     }
 
     /**

@@ -201,4 +201,13 @@ public class XmlBodyPanel extends JPanel {
     public void setXmlText(String xml) {
         xmlTextArea.setText(xml != null ? xml : "");
     }
+
+    /**
+     * 获取XML文本区域的引用
+     *
+     * @return JTextArea实例
+     */
+    public JTextArea getTextAreaRef() {
+        return xmlTextArea;
+    }
 } 

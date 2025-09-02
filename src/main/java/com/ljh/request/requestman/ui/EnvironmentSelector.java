@@ -3,6 +3,7 @@ package com.ljh.request.requestman.ui;
 import com.intellij.openapi.project.Project;
 import com.ljh.request.requestman.model.Environment;
 import com.ljh.request.requestman.util.ProjectSettingsManager;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import java.awt.*;
@@ -47,7 +48,7 @@ public class EnvironmentSelector extends JPanel {
         environmentComboBox.setPrototypeDisplayValue(null);
 
         // 添加鼠标悬停提示文本
-        environmentComboBox.setToolTipText("选择环境");
+        environmentComboBox.setToolTipText(RequestManBundle.message("env.selector.tooltip"));
 
         // 添加到主面板
         add(environmentComboBox);

@@ -1,0 +1,9 @@
+<svg width="16" height="16" viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+  <!-- 环形（水平镜像），顶点在 (8,1.6) -->
+  <g transform="translate(16,0) scale(-1,1)">
+    <path d="M8,1.6 A6.4,6.4 0 1,0 14.4,8"
+          stroke="#6C707E" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+  </g>
+  <!-- 箭头移动到弧形顶点，指向左侧 -->
+  <polygon points="5.0,1.6 8.4,0.2 8.4,3.0" fill="#6C707E"/>
+</svg>

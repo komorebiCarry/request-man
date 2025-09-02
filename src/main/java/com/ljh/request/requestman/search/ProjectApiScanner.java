@@ -7,6 +7,7 @@ import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.util.ApiInfoExtractor;
 import com.ljh.request.requestman.util.LogUtil;
 import com.ljh.request.requestman.util.PerformanceMonitor;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -94,8 +95,8 @@ public class ProjectApiScanner {
                         com.intellij.notification.NotificationGroupManager.getInstance()
                                 .getNotificationGroup("RequestMan")
                                 .createNotification(
-                                        "RequestMan 扫描超时",
-                                        "API扫描已超时（" + finalScanTimeoutSeconds + "秒），已停止扫描。您可以在设置页面修改超时时间。",
+                                        RequestManBundle.message("scanner.timeout.title"),
+                                        RequestManBundle.message("scanner.timeout.message", finalScanTimeoutSeconds),
                                         com.intellij.notification.NotificationType.WARNING
                                 )
                                 .notify(project);
@@ -161,17 +162,17 @@ public class ProjectApiScanner {
                             for (com.intellij.psi.PsiClass psiClass : batch) {
                                 // 检查超时
                                 if (System.currentTimeMillis() - startTime > timeoutMs) {
-                                    // 显示右下角气泡提示
-                                    ApplicationManager.getApplication().invokeLater(() -> {
-                                        com.intellij.notification.NotificationGroupManager.getInstance()
-                                                .getNotificationGroup("RequestMan")
-                                                .createNotification(
-                                                        "RequestMan 扫描超时",
-                                                        "API扫描已超时（" + finalScanTimeoutSeconds1 + "秒），已停止扫描。您可以在设置页面修改超时时间。",
-                                                        com.intellij.notification.NotificationType.WARNING
-                                                )
-                                                .notify(project);
-                                    });
+                                                                    // 显示右下角气泡提示
+                                ApplicationManager.getApplication().invokeLater(() -> {
+                                    com.intellij.notification.NotificationGroupManager.getInstance()
+                                            .getNotificationGroup("RequestMan")
+                                            .createNotification(
+                                                    RequestManBundle.message("scanner.timeout.title"),
+                                                    RequestManBundle.message("scanner.timeout.message", finalScanTimeoutSeconds1),
+                                                    com.intellij.notification.NotificationType.WARNING
+                                            )
+                                            .notify(project);
+                                });
                                     break;
                                 }
                                 processControllerClass(psiClass, keyword, mode, isScanResult, resultQueue, processedCount, targetCount);
@@ -305,7 +306,7 @@ public class ProjectApiScanner {
                         }
                     }
 
-                    LogUtil.debug("[PojoFieldScanner] 类: " + api.getClassName() + ", 方法: " + api.getMethodName());
+                    LogUtil.debug("[PojoFieldScanner] " + RequestManBundle.message("scanner.log.class.method", api.getClassName(), api.getMethodName()));
                     resultQueue.offer(api);
 
                     // 检查是否达到目标数量
@@ -533,7 +534,7 @@ public class ProjectApiScanner {
      */
     public static String performanceTest(Project project, com.intellij.psi.search.GlobalSearchScope scope) {
         StringBuilder result = new StringBuilder();
-        result.append("=== ProjectApiScanner 性能测试 ===\n");
+        result.append(RequestManBundle.message("scanner.performance.test.title")).append("\n");
 
         // 测试串行扫描
         long startTime = System.currentTimeMillis();
@@ -545,13 +546,13 @@ public class ProjectApiScanner {
         List<ApiInfo> parallelResult = scanApisParallel(project, "", 0, Integer.MAX_VALUE, "URL", scope, false);
         long parallelTime = System.currentTimeMillis() - startTime;
 
-        result.append(String.format("扫描结果数量: %d\n", serialResult.size()));
-        result.append(String.format("串行扫描耗时: %d ms\n", serialTime));
-        result.append(String.format("并行扫描耗时: %d ms\n", parallelTime));
-        result.append(String.format("性能提升: %.2f%%\n",
+        result.append(String.format(RequestManBundle.message("scanner.performance.result.count"), serialResult.size()));
+        result.append(String.format(RequestManBundle.message("scanner.performance.serial.time"), serialTime));
+        result.append(String.format(RequestManBundle.message("scanner.performance.parallel.time"), parallelTime));
+        result.append(String.format(RequestManBundle.message("scanner.performance.improvement"),
                 serialTime > 0 ? ((double) (serialTime - parallelTime) / serialTime) * 100 : 0));
-        result.append(String.format("结果一致性: %s\n",
-                serialResult.size() == parallelResult.size() ? "通过" : "失败"));
+        result.append(String.format(RequestManBundle.message("scanner.performance.consistency"),
+                serialResult.size() == parallelResult.size() ? RequestManBundle.message("scanner.performance.pass") : RequestManBundle.message("scanner.performance.fail")));
 
         return result.toString();
     }

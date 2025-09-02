@@ -1,5 +1,6 @@
 package com.ljh.request.requestman.util;
 
+import cn.hutool.json.JSONUtil;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.fileEditor.FileEditorManager;
 import com.intellij.openapi.project.Project;
@@ -9,6 +10,8 @@ import com.ljh.request.requestman.enums.HttpMethod;
 import com.ljh.request.requestman.enums.ParamDataType;
 import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.model.ApiParam;
+import com.ljh.request.requestman.util.DataTypeUtils;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -79,9 +82,48 @@ public class ApiInfoExtractor {
                 return apis;
             }
             for (PsiClass clazz : psiFile.getClasses()) {
+                // 仅处理Controller类
+                boolean isController = false;
+                if (clazz.getModifierList() != null) {
+                    for (PsiAnnotation ann : clazz.getModifierList().getAnnotations()) {
+                        String qn = ann.getQualifiedName();
+                        if (qn != null && (qn.endsWith("RestController") || qn.endsWith("Controller"))) {
+                            isController = true;
+                            break;
+                        }
+                    }
+                }
+                if (!isController) {
+                    continue;
+                }
                 for (PsiMethod method : clazz.getMethods()) {
                     // 过滤掉构造方法
                     if (method.isConstructor()) {
+                        continue;
+                    }
+                    // 仅处理带 Mapping 的方法
+                    boolean hasMapping = false;
+                    if (method.getModifierList() != null) {
+                        for (PsiAnnotation ann : method.getModifierList().getAnnotations()) {
+                            String qn = ann.getQualifiedName();
+                            if (qn == null) {
+                                continue;
+                            }
+                            if (qn.equals("org.springframework.web.bind.annotation.RequestMapping")
+                                    || qn.equals("org.springframework.web.bind.annotation.GetMapping")
+                                    || qn.equals("org.springframework.web.bind.annotation.PostMapping")
+                                    || qn.equals("org.springframework.web.bind.annotation.PutMapping")
+                                    || qn.equals("org.springframework.web.bind.annotation.DeleteMapping")
+                                    || qn.equals("org.springframework.web.bind.annotation.PatchMapping")
+                                    || qn.equals("RequestMapping") || qn.equals("GetMapping")
+                                    || qn.equals("PostMapping") || qn.equals("PutMapping")
+                                    || qn.equals("DeleteMapping") || qn.equals("PatchMapping")) {
+                                hasMapping = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!hasMapping) {
                         continue;
                     }
                     apis.add(extractApiInfoFromMethod(method, true));
@@ -118,7 +160,7 @@ public class ApiInfoExtractor {
                     }
                     Project project = respClass.getProject();
                     if (isScanResult) {
-                        responseParams = PojoFieldScanner.scanPojoFieldsWithGenerics(respClass, null, new HashSet<>(), genericMap, project);
+                        responseParams = PojoFieldScanner.scanPojoFieldsWithGenerics(respClass, null, new HashSet<>(), genericMap, project, null);
                     }
                 }
             }
@@ -236,7 +278,7 @@ public class ApiInfoExtractor {
                 continue;
             }
             if (qualifiedName.endsWith("RequestMapping") || qualifiedName.endsWith("GetMapping") || qualifiedName.endsWith("PostMapping") ||
-                    qualifiedName.endsWith("PutMapping") || qualifiedName.endsWith("DeleteMapping")) {
+                    qualifiedName.endsWith("PutMapping") || qualifiedName.endsWith("DeleteMapping") || qualifiedName.endsWith("PatchMapping")) {
                 PsiAnnotationMemberValue value = ann.findAttributeValue("value");
                 if (value != null) {
                     return extractPathFromValue(value);
@@ -263,7 +305,6 @@ public class ApiInfoExtractor {
         }
         return bp + (u.isEmpty() ? "" : (bp.endsWith(SLASH) ? "" : SLASH) + u);
     }
-
 
 
     /**
@@ -300,20 +341,29 @@ public class ApiInfoExtractor {
                 }
 
                 // 判断是否应该归类为body参数
-                boolean shouldBeBodyParam = isRequestBody || shouldRequestParamBeBody(isPathVariable, httpMethod, consumesType, paramConsumesType);
+                boolean shouldBeBodyParam = isRequestBody || shouldRequestParamBeBody(isPathVariable, httpMethod, consumesType, paramConsumesType, param.getType());
 
                 if (shouldBeBodyParam) {
-                    ParamDataType dataType = guessDataType(param);
+                    ParamDataType dataType = DataTypeUtils.guessDataType(param);
                     PsiType paramType = param.getType();
 
                     // 确定contentType：优先使用参数的consumes，如果没有则使用方法的consumes
                     String contentType = paramConsumesType != null ? paramConsumesType : consumesType;
 
+                    // 如果都没有指定，且是非GET请求的Body参数，根据数据类型设置默认表单类型
+                    if (!isRequestBody && contentType == null && !"GET".equalsIgnoreCase(httpMethod)) {
+                        if (ParamDataType.FILE.equals(dataType)) {
+                            contentType = "multipart/form-data";
+                        } else {
+                            contentType = "application/x-www-form-urlencoded";
+                        }
+                    }
+
                     // 处理数组类型（如byte[]）
                     if (paramType instanceof PsiArrayType arrayType) {
                         PsiType componentType = arrayType.getComponentType();
                         String componentTypeName = componentType.getCanonicalText();
-                        ApiParam apiParam = new ApiParam(param.getName(), "请求体", "", dataType, paramType.getCanonicalText(), contentType);
+                        ApiParam apiParam = new ApiParam(param.getName(), RequestManBundle.message("param.location.body"), "", dataType, paramType.getCanonicalText(), contentType);
                         apiParam.setRawType(componentTypeName + "[]");
                         bodyParams.add(apiParam);
                         continue;
@@ -323,7 +373,7 @@ public class ApiInfoExtractor {
                     if (paramType instanceof PsiClassType classType) {
                         PsiClass psiClass = classType.resolve();
 
-                        ApiParam apiParam = new ApiParam(param.getName(), "请求体", "", dataType, paramType.getCanonicalText(), contentType);
+                        ApiParam apiParam = new ApiParam(param.getName(), RequestManBundle.message("param.location.body"), "", dataType, paramType.getCanonicalText(), contentType);
                         if (psiClass != null) {
                             String classDesc = PojoFieldScanner.getClassDescription(psiClass);
                             if (!classDesc.isEmpty()) {
@@ -340,14 +390,14 @@ public class ApiInfoExtractor {
                                     apiParam.setRawType(classType.getPresentableText());
                                     PojoFieldScanner.handleGenericType(apiParam, classType, new HashSet<>(), genericMap, project);
                                 } else {
-                                    apiParam.setChildren(PojoFieldScanner.scanPojoFields(psiClass, method.getProject()));
+                                    apiParam.setChildren(PojoFieldScanner.scanPojoFields(psiClass, method.getProject(), apiParam));
                                 }
                             }
                         }
                         bodyParams.add(apiParam);
                     } else {
                         // 处理其他类型（如基本类型）
-                        ApiParam apiParam = new ApiParam(param.getName(), "请求体", "", dataType, paramType.getCanonicalText(), contentType);
+                        ApiParam apiParam = new ApiParam(param.getName(), RequestManBundle.message("param.location.body"), "", dataType, paramType.getCanonicalText(), contentType);
                         apiParam.setRawType(paramType.getPresentableText());
                         bodyParams.add(apiParam);
                     }
@@ -611,19 +661,19 @@ public class ApiInfoExtractor {
                 }
 
                 // 如果参数应该归类为body参数，则跳过
-                if (isRequestBody || shouldRequestParamBeBody(isPathVariable, httpMethod, consumesType, null)) {
+                if (isRequestBody || shouldRequestParamBeBody(isPathVariable, httpMethod, consumesType, null, param.getType())) {
                     continue;
                 }
 
-                ParamDataType dataType = guessDataType(param);
+                ParamDataType dataType = DataTypeUtils.guessDataType(param);
                 String rawType = param.getType().getCanonicalText();
 
                 // 路径变量的参数
                 if (isPathVariable) {
-                    params.add(new ApiParam(param.getName(), "路径变量", "", dataType, rawType, null));
+                    params.add(new ApiParam(param.getName(), "Path", "", dataType, rawType, null));
                 } else if (isRequestParam) {
                     // 只有GET请求或没有明确Content-Type的@RequestParam才作为URL参数
-                    params.add(new ApiParam(param.getName(), "请求参数", "", dataType, rawType, null));
+                    params.add(new ApiParam(param.getName(), "Query", "", dataType, rawType, null));
                 }
             }
             return params;
@@ -638,7 +688,7 @@ public class ApiInfoExtractor {
      * @param paramConsumes  参数的consumes类型
      * @return 是否应该归类为body参数
      */
-    private static boolean shouldRequestParamBeBody(boolean isPathVariable, String httpMethod, String methodConsumes, String paramConsumes) {
+    private static boolean shouldRequestParamBeBody(boolean isPathVariable, String httpMethod, String methodConsumes, String paramConsumes, PsiType paramType) {
         if (isPathVariable) {
             return false;
         }
@@ -658,9 +708,34 @@ public class ApiInfoExtractor {
             }
         }
 
-        // 对于POST/PUT/PATCH等非GET请求，如果没有明确指定Content-Type，
-        // 默认@RequestParam作为body参数处理（更符合实际使用场景）
-        return !"GET".equalsIgnoreCase(httpMethod);
+        // 关键：检查参数类型
+        if (isBasicType(paramType)) {
+            // 基础类型 → 应该是 URL 参数，不是 Body 参数
+            return false;
+        }
+
+        // 实体类型 → 应该是 Body 参数
+        return true;
+    }
+
+    /**
+     * 判断是否为基础类型
+     */
+    private static boolean isBasicType(PsiType type) {
+        if (type instanceof PsiPrimitiveType) {
+            return true;
+        }
+
+        String canonicalText = type.getCanonicalText();
+        return "java.lang.String".equals(canonicalText) ||
+                "java.lang.Integer".equals(canonicalText) ||
+                "java.lang.Long".equals(canonicalText) ||
+                "java.lang.Double".equals(canonicalText) ||
+                "java.lang.Boolean".equals(canonicalText) ||
+                "java.lang.Float".equals(canonicalText) ||
+                "java.lang.Short".equals(canonicalText) ||
+                "java.lang.Byte".equals(canonicalText) ||
+                "java.lang.Character".equals(canonicalText);
     }
 
     /**
@@ -754,60 +829,6 @@ public class ApiInfoExtractor {
     }
 
     /**
-     * 猜测参数数据类型
-     *
-     * @param param PsiParameter
-     * @return ParamDataType
-     */
-    private static ParamDataType guessDataType(PsiParameter param) {
-        PsiType type = param.getType();
-        String presentableText = type.getPresentableText();
-        String canonicalText = type.getCanonicalText();
-        // 基础类型判断
-        if (INT_TYPE.equals(presentableText) || INTEGER_TYPE.equals(presentableText) || LONG_TYPE.equals(presentableText) || LONG_CLASS_TYPE.equals(presentableText)
-                || SHORT_TYPE.equals(presentableText) || SHORT_CLASS_TYPE.equals(presentableText)) {
-            return ParamDataType.INTEGER;
-        }
-        if (BOOLEAN_TYPE.equals(presentableText) || BOOLEAN_CLASS_TYPE.equals(presentableText)) {
-            return ParamDataType.BOOLEAN;
-        }
-        if (DOUBLE_TYPE.equals(presentableText) || DOUBLE_CLASS_TYPE.equals(presentableText) || FLOAT_TYPE.equals(presentableText) || FLOAT_CLASS_TYPE.equals(presentableText)
-                || BIGDECIMAL_TYPE.equals(presentableText) || BIGDECIMAL_FULL_TYPE.equals(canonicalText)) {
-            return ParamDataType.NUMBER;
-        }
-        if (STRING_TYPE.equals(presentableText) || JAVA_STRING_TYPE.equals(canonicalText)) {
-            return ParamDataType.STRING;
-        }
-        // 数组类型
-        if (type instanceof PsiArrayType) {
-            return ParamDataType.ARRAY;
-        }
-        // 集合类型
-        if (type instanceof PsiClassType classType) {
-            PsiClass psiClass = classType.resolve();
-            if (psiClass != null) {
-                String qualifiedName = psiClass.getQualifiedName();
-                if (LIST_TYPE.equals(qualifiedName) || ARRAYLIST_TYPE.equals(qualifiedName)
-                        || COLLECTION_TYPE.equals(qualifiedName)) {
-                    return ParamDataType.ARRAY;
-                }
-                if (FILE_TYPE.equals(qualifiedName) || MULTIPART_FILE_TYPE.equals(qualifiedName)) {
-                    return ParamDataType.FILE;
-                }
-                // 只要不是JDK内置类型，默认按对象处理
-                if (qualifiedName != null && !qualifiedName.startsWith("java.")) {
-                    return ParamDataType.OBJECT;
-                }
-                if (psiClass instanceof PsiTypeParameter) {
-                    // 是泛型类型参数，如 T、E、K、V 等
-                    return ParamDataType.OBJECT;
-                }
-            }
-        }
-        return ParamDataType.UNKNOWN;
-    }
-
-    /**
      * 获取ParamTypes
      *
      * @param method
@@ -822,5 +843,53 @@ public class ApiInfoExtractor {
                     .map(parameter -> parameter.getType().getCanonicalText())
                     .collect(Collectors.toList());
         });
+    }
+
+    /**
+     * 获取bodyParamList json
+     *
+     * @param bodyParamList
+     * @return
+     */
+    public static String getApiInfoBodyJson(List<ApiParam> bodyParamList) {
+        if (bodyParamList == null || bodyParamList.isEmpty()) {
+            return "";
+        }
+        StringBuilder json = new StringBuilder();
+        if (bodyParamList.size() == 1 && bodyParamList.get(0).getChildren() != null && !bodyParamList.get(0).getChildren().isEmpty()) {
+            ApiParam apiParam = bodyParamList.get(0);
+            boolean isArray = false;
+            int index = 0;
+            if (ParamDataType.ARRAY.equals(apiParam.getDataType())) {
+                isArray = true;
+                json.append("[");
+                json.append("\n");
+                index = 2;
+            }
+            json.append(JsonExampleGenerator.genJsonWithComment(bodyParamList.get(0).getChildren(), index));
+            if (isArray) {
+                json.append("\n");
+                json.append("]");
+            }
+        } else {
+            json.append(JsonExampleGenerator.genJsonWithComment(bodyParamList, 0));
+        }
+        return json.toString();
+    }
+
+
+    /**
+     * 使用Hutool标准格式化JSON字符串，格式化后去除冒号和逗号后的所有空格，生成极致紧凑的json
+     */
+    public static String formatJson(String json) {
+        try {
+            // 去除所有换行和多余空白
+            String compact = json.replaceAll("\\s*\\n\\s*", "");
+            // 去除冒号和逗号后的所有空格
+            compact = compact.replaceAll(":\\s+", ":").replaceAll(",\\s+", ",");
+            return JSONUtil.formatJsonStr(compact);
+        } catch (Exception e) {
+            return json;
+        }
     }
 } 

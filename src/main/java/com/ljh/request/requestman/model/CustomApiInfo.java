@@ -1,5 +1,7 @@
 package com.ljh.request.requestman.model;
 
+import com.ljh.request.requestman.ui.CookiesPanel;
+import com.ljh.request.requestman.ui.HeadersPanel;
 import com.ljh.request.requestman.ui.PostOpPanel;
 
 import java.io.Serializable;
@@ -13,6 +15,8 @@ import java.util.Objects;
  * @date 2025/06/19 09:36
  */
 public class CustomApiInfo implements Serializable {
+
+    private static final long serialVersionUID = 6664074267456260461L;
     /**
      * 接口名称
      */
@@ -57,6 +61,15 @@ public class CustomApiInfo implements Serializable {
      * 自定义认证内容
      */
     private String authValue = "";
+    /**
+     * 请求头参数
+     */
+    private List<HeadersPanel.HeaderItem> headers = new ArrayList<>();
+    /**
+     * cookie
+     */
+    private List<CookiesPanel.CookieItem> cookieItems = new ArrayList<>();
+
 
     public CustomApiInfo() {
     }
@@ -73,6 +86,14 @@ public class CustomApiInfo implements Serializable {
         this.body = body;
         this.description = description;
         this.postOps = postOps;
+    }
+
+    public List<CookiesPanel.CookieItem> getCookieItems() {
+        return cookieItems;
+    }
+
+    public void setCookieItems(List<CookiesPanel.CookieItem> cookieItems) {
+        this.cookieItems = cookieItems;
     }
 
     public String getName() {
@@ -161,6 +182,14 @@ public class CustomApiInfo implements Serializable {
 
     public void setAuthValue(String authValue) {
         this.authValue = authValue;
+    }
+
+    public List<com.ljh.request.requestman.ui.HeadersPanel.HeaderItem> getHeaders() {
+        return headers;
+    }
+
+    public void setHeaders(List<com.ljh.request.requestman.ui.HeadersPanel.HeaderItem> headers) {
+        this.headers = headers;
     }
 
     @Override

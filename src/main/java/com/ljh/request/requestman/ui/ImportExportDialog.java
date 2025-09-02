@@ -10,6 +10,7 @@ import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBRadioButton;
 import com.intellij.ui.components.JBTextField;
 import com.ljh.request.requestman.model.CustomApiInfo;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import java.awt.*;
@@ -53,7 +54,7 @@ public class ImportExportDialog extends DialogWrapper {
         this.customApiList = customApiList;
         this.customApiListModel = customApiListModel;
 
-        setTitle(isImport ? "导入接口集合" : "导出接口集合");
+        setTitle(isImport ? RequestManBundle.message("impexp.title.import") : RequestManBundle.message("impexp.title.export"));
         init();
     }
 
@@ -82,7 +83,7 @@ public class ImportExportDialog extends DialogWrapper {
         filePathField = new JBTextField();
         filePathField.setEditable(false);
 
-        JButton browseButton = new JButton("浏览");
+        JButton browseButton = new JButton(RequestManBundle.message("impexp.browse"));
         browseButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -91,7 +92,7 @@ public class ImportExportDialog extends DialogWrapper {
         });
 
         JPanel filePanel = new JPanel(new BorderLayout());
-        filePanel.add(new JBLabel(isImport ? "选择要导入的JSON文件:" : "选择导出文件保存位置:"), BorderLayout.NORTH);
+        filePanel.add(new JBLabel(isImport ? RequestManBundle.message("impexp.select.import") : RequestManBundle.message("impexp.select.export")), BorderLayout.NORTH);
 
         JPanel inputPanel = new JPanel(new BorderLayout());
         inputPanel.add(filePathField, BorderLayout.CENTER);
@@ -117,8 +118,8 @@ public class ImportExportDialog extends DialogWrapper {
      */
     private JPanel createImportConfigPanel() {
         // 导入模式选择
-        overwriteRadioButton = new JBRadioButton("覆盖现有接口");
-        appendRadioButton = new JBRadioButton("追加到现有接口");
+        overwriteRadioButton = new JBRadioButton(RequestManBundle.message("impexp.import.overwrite"));
+        appendRadioButton = new JBRadioButton(RequestManBundle.message("impexp.import.append"));
         appendRadioButton.setSelected(true); // 默认选择追加模式
 
         importModeGroup = new ButtonGroup();
@@ -126,7 +127,7 @@ public class ImportExportDialog extends DialogWrapper {
         importModeGroup.add(appendRadioButton);
 
         JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        modePanel.add(new JBLabel("导入模式:"));
+        modePanel.add(new JBLabel(RequestManBundle.message("impexp.import.mode")));
         modePanel.add(overwriteRadioButton);
         modePanel.add(appendRadioButton);
 
@@ -148,7 +149,7 @@ public class ImportExportDialog extends DialogWrapper {
         JFileChooser fileChooser = new JFileChooser();
 
         if (isImport) {
-            fileChooser.setDialogTitle("选择要导入的JSON文件");
+            fileChooser.setDialogTitle(RequestManBundle.message("impexp.dialog.import.title"));
             fileChooser.setFileFilter(new javax.swing.filechooser.FileFilter() {
                 @Override
                 public boolean accept(File f) {
@@ -157,15 +158,15 @@ public class ImportExportDialog extends DialogWrapper {
 
                 @Override
                 public String getDescription() {
-                    return "JSON文件 (*.json)";
+                    return RequestManBundle.message("impexp.dialog.filefilter.json");
                 }
             });
         } else {
-            fileChooser.setDialogTitle("选择导出文件保存位置");
+            fileChooser.setDialogTitle(RequestManBundle.message("impexp.dialog.export.title"));
             fileChooser.setSelectedFile(new File("RequestMan_APIs.json"));
         }
 
-        int result = fileChooser.showDialog(this.getContentPane(), isImport ? "导入" : "导出");
+        int result = fileChooser.showDialog(this.getContentPane(), isImport ? RequestManBundle.message("impexp.btn.import") : RequestManBundle.message("impexp.btn.export"));
         if (result == JFileChooser.APPROVE_OPTION) {
             File selectedFile = fileChooser.getSelectedFile();
             filePathField.setText(selectedFile.getAbsolutePath());
@@ -176,7 +177,7 @@ public class ImportExportDialog extends DialogWrapper {
     protected void doOKAction() {
         String filePath = filePathField.getText().trim();
         if (StrUtil.isBlank(filePath)) {
-            Messages.showErrorDialog(this.getContentPane(), "请选择文件路径", "错误");
+            Messages.showErrorDialog(this.getContentPane(), RequestManBundle.message("impexp.error.noPath"), RequestManBundle.message("common.error"));
             return;
         }
 
@@ -188,7 +189,7 @@ public class ImportExportDialog extends DialogWrapper {
             }
             super.doOKAction();
         } catch (Exception e) {
-            Messages.showErrorDialog(this.getContentPane(), "操作失败: " + e.getMessage(), "错误");
+            Messages.showErrorDialog(this.getContentPane(), RequestManBundle.message("impexp.error.operation", e.getMessage()), RequestManBundle.message("common.error"));
         }
     }
 
@@ -203,7 +204,7 @@ public class ImportExportDialog extends DialogWrapper {
         List<CustomApiInfo> importedApis = JSONUtil.toList(jsonContent, CustomApiInfo.class);
 
         if (importedApis.isEmpty()) {
-            Messages.showWarningDialog(this.getContentPane(), "导入的JSON文件中没有找到有效的接口数据", "导入失败");
+            Messages.showWarningDialog(this.getContentPane(), RequestManBundle.message("impexp.import.empty"), RequestManBundle.message("impexp.import.fail"));
             return;
         }
 
@@ -215,8 +216,8 @@ public class ImportExportDialog extends DialogWrapper {
                 customApiListModel.addElement(api);
             }
             Messages.showInfoMessage(this.getContentPane(),
-                    String.format("成功导入 %d 个接口，覆盖了原有接口", importedApis.size()),
-                    "导入成功");
+                    RequestManBundle.message("impexp.import.success.overwrite", importedApis.size()),
+                    RequestManBundle.message("impexp.import.success"));
         } else {
             // 追加模式：添加导入的接口到现有列表
             int originalSize = customApiListModel.getSize();
@@ -224,9 +225,8 @@ public class ImportExportDialog extends DialogWrapper {
                 customApiListModel.addElement(api);
             }
             Messages.showInfoMessage(this.getContentPane(),
-                    String.format("成功导入 %d 个接口，现有接口总数: %d",
-                            importedApis.size(), customApiListModel.getSize()),
-                    "导入成功");
+                    RequestManBundle.message("impexp.import.success.append", importedApis.size(), customApiListModel.getSize()),
+                    RequestManBundle.message("impexp.import.success"));
         }
     }
 
@@ -235,7 +235,7 @@ public class ImportExportDialog extends DialogWrapper {
      */
     private void performExport(String filePath) throws Exception {
         if (customApiList.isEmpty()) {
-            Messages.showWarningDialog(this.getContentPane(), "没有接口可以导出", "警告");
+            Messages.showWarningDialog(this.getContentPane(), RequestManBundle.message("impexp.export.empty"), RequestManBundle.message("common.warn"));
             return;
         }
 
@@ -246,7 +246,7 @@ public class ImportExportDialog extends DialogWrapper {
         FileUtil.writeString(jsonContent, filePath, StandardCharsets.UTF_8);
 
         Messages.showInfoMessage(this.getContentPane(),
-                String.format("成功导出 %d 个接口到文件: %s", customApiList.size(), filePath), "导出成功");
+                RequestManBundle.message("impexp.export.success", customApiList.size(), filePath), RequestManBundle.message("impexp.export.done"));
     }
 
     /**

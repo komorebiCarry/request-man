@@ -37,5 +37,19 @@ public enum ParamDataType {
     /**
      * 对象类型
      */
-    OBJECT;
+    OBJECT,
+    /**
+     * 枚举类型
+     */
+    ENUM
+    ;
+
+    public static ParamDataType getParamDataType(String value) {
+        for (ParamDataType paramDataType : ParamDataType.values()) {
+            if (paramDataType.toString().equalsIgnoreCase(value)) {
+                return paramDataType;
+            }
+        }
+        return STRING;
+    }
 } 

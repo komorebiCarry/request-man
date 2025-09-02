@@ -3,11 +3,14 @@ package com.ljh.request.requestman.ui;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.project.Project;
+import com.ljh.request.requestman.search.FontManager;
 import com.ljh.request.requestman.util.ProjectSettingsManager;
 import com.ljh.request.requestman.util.ProjectUtils;
 import com.ljh.request.requestman.util.PerformanceMonitor;
 import com.ljh.request.requestman.search.ApiSearchPopup;
 import com.ljh.request.requestman.ui.EnvironmentManagerPanel;
+import com.ljh.request.requestman.util.LanguageManager;
+import com.ljh.request.requestman.util.RequestManBundle;
 import org.apache.commons.lang3.StringUtils;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.Nullable;
@@ -50,6 +53,11 @@ public class RequestManSettingsConfigurable implements Configurable {
     private JSpinner scanTimeoutSpinner;
     // 接口搜索字体大小设置
     private JSpinner searchFontSizeSpinner;
+    // 静默保存设置
+    private JCheckBox autoSaveCheckBox;
+
+    // 语言设置
+    private JComboBox<String> languageComboBox;
 
     // 当前项目对象
     private Project currentProject;
@@ -60,7 +68,7 @@ public class RequestManSettingsConfigurable implements Configurable {
 
     @Override
     public @Nls(capitalization = Nls.Capitalization.Title) String getDisplayName() {
-        return "RequestMan 设置";
+        return RequestManBundle.message("settings.displayName");
     }
 
     @Override
@@ -75,24 +83,60 @@ public class RequestManSettingsConfigurable implements Configurable {
 
         // 主Tab面板
         tabbedPane = new JTabbedPane();
-        // 基础设置面板
-        mainPanel = new JPanel();
-        mainPanel.setLayout(new BoxLayout(mainPanel, BoxLayout.Y_AXIS));
-        // 前置URL配置区域（已移至环境管理中）
-        // JPanel preUrlPanel = new JPanel(new BorderLayout(8, 8));
-        // JLabel preUrlLabel = new JLabel("前置URL:");
-        // preUrlField = new JTextField();
-        // preUrlField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        // preUrlPanel.add(preUrlLabel, BorderLayout.WEST);
-        // preUrlPanel.add(preUrlField, BorderLayout.CENTER);
-        // preUrlPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-        // mainPanel.add(preUrlPanel);
-        // 缓存目录配置区域
-        JPanel cacheDirPanel = new JPanel(new BorderLayout(8, 8));
-        JLabel cacheDirLabel = new JLabel("缓存目录:");
+        
+        // 基础设置面板 - 使用更紧凑的布局
+        mainPanel = new JPanel(new BorderLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // 基础设置表单（紧凑对齐）
+        JPanel basicForm = new JPanel(new GridBagLayout());
+        
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8);
+        gbc.anchor = GridBagConstraints.WEST;
+        
+        // 语言设置
+        gbc.gridy = 0;
+        gbc.gridx = 0;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        JLabel languageLabel = new JLabel(RequestManBundle.message("language.title") + ":");
+        languageLabel.setPreferredSize(new Dimension(100, 25));
+        basicForm.add(languageLabel, gbc);
+        
+        gbc.gridx = 1;
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        languageComboBox = new JComboBox<>(new String[]{
+                RequestManBundle.message("language.english"),
+                RequestManBundle.message("language.chinese")
+        });
+        languageComboBox.setPreferredSize(new Dimension(150, 25));
+        String langCode = LanguageManager.getLanguageCode();
+        languageComboBox.setSelectedIndex("zh_CN".equals(langCode) ? 1 : 0);
+        basicForm.add(languageComboBox, gbc);
+
+        // 缓存目录
+        gbc.gridy++;
+        gbc.gridx = 0;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        JLabel cacheDirLabel = new JLabel(RequestManBundle.message("settings.cacheDir") + ":");
+        cacheDirLabel.setPreferredSize(new Dimension(100, 25));
+        basicForm.add(cacheDirLabel, gbc);
+        
+        gbc.gridx = 1;
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         cacheDirField = new JTextField();
-        cacheDirField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        selectDirButton = new JButton("选择目录");
+        cacheDirField.setPreferredSize(new Dimension(200, 25));
+        basicForm.add(cacheDirField, gbc);
+        
+        gbc.gridx = 2;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        selectDirButton = new JButton(RequestManBundle.message("settings.chooseDir"));
+        selectDirButton.setPreferredSize(new Dimension(80, 25));
         selectDirButton.addActionListener(e -> {
             JFileChooser chooser = new JFileChooser();
             chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
@@ -101,41 +145,53 @@ public class RequestManSettingsConfigurable implements Configurable {
                 cacheDirField.setText(chooser.getSelectedFile().getAbsolutePath());
             }
         });
-        cacheDirPanel.add(cacheDirLabel, BorderLayout.WEST);
-        cacheDirPanel.add(cacheDirField, BorderLayout.CENTER);
-        cacheDirPanel.add(selectDirButton, BorderLayout.EAST);
-        cacheDirPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-        mainPanel.add(Box.createVerticalStrut(8));
-        mainPanel.add(cacheDirPanel);
+        basicForm.add(selectDirButton, gbc);
 
-        // 全局认证信息配置（按项目缓存）
-        JPanel authPanel = new JPanel(new BorderLayout(8, 8));
-        JLabel authLabel = new JLabel("全局认证信息:");
+        // 全局认证信息
+        gbc.gridy++;
+        gbc.gridx = 0;
+        gbc.weightx = 0;
+        gbc.fill = GridBagConstraints.NONE;
+        JLabel authLabel = new JLabel(RequestManBundle.message("settings.globalAuth") + ":");
+        authLabel.setPreferredSize(new Dimension(100, 25));
+        basicForm.add(authLabel, gbc);
+        
+        gbc.gridx = 1;
+        gbc.gridwidth = 2;
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         globalAuthField = new JTextField();
-        globalAuthField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
-        authPanel.add(authLabel, BorderLayout.WEST);
-        authPanel.add(globalAuthField, BorderLayout.CENTER);
-        authPanel.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-        mainPanel.add(Box.createVerticalStrut(8));
-        mainPanel.add(authPanel);
+        globalAuthField.setPreferredSize(new Dimension(200, 25));
+        basicForm.add(globalAuthField, gbc);
+        gbc.gridwidth = 1;
+
+        mainPanel.add(basicForm, BorderLayout.NORTH);
         // 新增：全局变量Tab - 传递正确的项目对象
         variablePanel = new VariablePanel(currentProject);
 
         // 新增：环境管理Tab
         environmentManagerPanel = new EnvironmentManagerPanel(currentProject);
 
-        tabbedPane.addTab("基础设置", mainPanel);
-        tabbedPane.addTab("环境管理", environmentManagerPanel);
-        tabbedPane.addTab("全局变量", variablePanel);
-        // 新增：接口搜索Tab
-        apiSearchPanel = new JPanel();
-        apiSearchPanel.setLayout(new BoxLayout(apiSearchPanel, BoxLayout.Y_AXIS));
+        tabbedPane.addTab(RequestManBundle.message("settings.tab.basic"), mainPanel);
+        tabbedPane.addTab(RequestManBundle.message("settings.tab.environment"), environmentManagerPanel);
+        tabbedPane.addTab(RequestManBundle.message("settings.tab.variables"), variablePanel);
+        // 新增：接口搜索Tab - 使用更紧凑的布局
+        apiSearchPanel = new JPanel(new BorderLayout());
+        apiSearchPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // 创建垂直布局容器
+        JPanel searchContentPanel = new JPanel();
+        searchContentPanel.setLayout(new BoxLayout(searchContentPanel, BoxLayout.Y_AXIS));
+        
         // 搜索模式单选框
-        JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        modePanel.setBorder(BorderFactory.createTitledBorder("接口搜索模式"));
-        instantSearchRadio = new JRadioButton("即时搜索");
-        initSearchRadio = new JRadioButton("项目启动初始化搜索");
-        popupInitSearchRadio = new JRadioButton("弹窗初始化搜索");
+        JPanel modePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        modePanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.search.mode.title")
+        ));
+        instantSearchRadio = new JRadioButton(RequestManBundle.message("settings.search.mode.instant"));
+        initSearchRadio = new JRadioButton(RequestManBundle.message("settings.search.mode.init"));
+        popupInitSearchRadio = new JRadioButton(RequestManBundle.message("settings.search.mode.popup_init"));
         searchModeGroup = new ButtonGroup();
         searchModeGroup.add(instantSearchRadio);
         searchModeGroup.add(initSearchRadio);
@@ -143,34 +199,44 @@ public class RequestManSettingsConfigurable implements Configurable {
         modePanel.add(instantSearchRadio);
         modePanel.add(initSearchRadio);
         modePanel.add(popupInitSearchRadio);
-        apiSearchPanel.add(modePanel);
+        searchContentPanel.add(modePanel);
+        
         // 三方包勾选
-        JPanel libsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        includeLibsCheckBox = new JCheckBox("扫描三方包");
+        JPanel libsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        libsPanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.search.libs.title")
+        ));
+        includeLibsCheckBox = new JCheckBox(RequestManBundle.message("settings.search.includeLibs"));
         libsPanel.add(includeLibsCheckBox);
 
         // 添加性能提示
-        JLabel performanceTipLabel = new JLabel("(大项目建议关闭以提高性能)");
+        JLabel performanceTipLabel = new JLabel(RequestManBundle.message("settings.search.performance.tip"));
         performanceTipLabel.setForeground(Color.GRAY);
         performanceTipLabel.setFont(performanceTipLabel.getFont().deriveFont(Font.ITALIC, performanceTipLabel.getFont().getSize() - 1));
         libsPanel.add(performanceTipLabel);
 
-        apiSearchPanel.add(libsPanel);
+        searchContentPanel.add(libsPanel);
 
         // 字体大小设置
-        JPanel fontSizePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        fontSizePanel.setBorder(BorderFactory.createTitledBorder("字体设置"));
-        fontSizePanel.add(new JLabel("搜索框字体大小:"));
+        JPanel fontSizePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        fontSizePanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.font.title")
+        ));
+        fontSizePanel.add(new JLabel(RequestManBundle.message("settings.font.size")));
         // 获取默认字体大小
         int defaultFontSize = getDefaultFontSize();
         searchFontSizeSpinner = new JSpinner(new SpinnerNumberModel(defaultFontSize, 12, 32, 1));
         fontSizePanel.add(searchFontSizeSpinner);
-        JLabel fontSizeTipLabel = new JLabel("(影响搜索框和结果列表的字体大小，需要重新打开搜索弹窗生效)");
+        JLabel fontSizeTipLabel = new JLabel(RequestManBundle.message("settings.font.tip"));
         fontSizeTipLabel.setForeground(Color.GRAY);
         fontSizeTipLabel.setFont(fontSizeTipLabel.getFont().deriveFont(Font.ITALIC, fontSizeTipLabel.getFont().getSize() - 1));
         fontSizePanel.add(fontSizeTipLabel);
 
-        apiSearchPanel.add(fontSizePanel);
+        searchContentPanel.add(fontSizePanel);
+        
+        apiSearchPanel.add(searchContentPanel, BorderLayout.NORTH);
         // 加载已保存配置
         String searchMode = PropertiesComponent.getInstance().getValue("requestman.searchMode", "popup_init");
         if ("init".equals(searchMode)) {
@@ -187,40 +253,72 @@ public class RequestManSettingsConfigurable implements Configurable {
         // 加载字体大小配置
         int savedFontSize = getIntValue("requestman.searchFontSize", getDefaultFontSize());
         searchFontSizeSpinner.setValue(savedFontSize);
+        
         // 加入Tab
-        tabbedPane.addTab("接口搜索", apiSearchPanel);
+        tabbedPane.addTab(RequestManBundle.message("settings.tab.search"), apiSearchPanel);
 
-        // 新增：性能优化Tab
-        JPanel performancePanel = new JPanel();
-        performancePanel.setLayout(new BoxLayout(performancePanel, BoxLayout.Y_AXIS));
+        // 新增：性能优化Tab - 使用更紧凑的布局
+        JPanel performancePanel = new JPanel(new BorderLayout());
+        performancePanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        // 创建垂直布局容器
+        JPanel performanceContentPanel = new JPanel();
+        performanceContentPanel.setLayout(new BoxLayout(performanceContentPanel, BoxLayout.Y_AXIS));
 
         // 性能监控设置
-        JPanel monitoringPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        monitoringPanel.setBorder(BorderFactory.createTitledBorder("性能监控"));
-        enablePerformanceMonitoringCheckBox = new JCheckBox("启用性能监控");
+        JPanel monitoringPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        monitoringPanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.performance.title")
+        ));
+        enablePerformanceMonitoringCheckBox = new JCheckBox(RequestManBundle.message("settings.performance.enable"));
         monitoringPanel.add(enablePerformanceMonitoringCheckBox);
 
         monitoringPanel.add(Box.createHorizontalStrut(20));
 
-        JButton viewPerformanceReportButton = new JButton("查看性能报告");
+        JButton viewPerformanceReportButton = new JButton(RequestManBundle.message("settings.performance.view"));
         viewPerformanceReportButton.addActionListener(e -> showPerformanceReport());
         monitoringPanel.add(viewPerformanceReportButton);
 
-        performancePanel.add(monitoringPanel);
+        performanceContentPanel.add(monitoringPanel);
 
         // 移除自动扫描设置，避免与接口搜索设置冲突
 
         // 移除缓存设置，避免影响用户搜索体验
 
         // 扫描超时设置
-        JPanel timeoutPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        timeoutPanel.setBorder(BorderFactory.createTitledBorder("扫描超时"));
-        timeoutPanel.add(new JLabel("扫描超时时间(秒):"));
+        JPanel timeoutPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        timeoutPanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.timeout.title")
+        ));
+        timeoutPanel.add(new JLabel(RequestManBundle.message("settings.timeout.seconds")));
         scanTimeoutSpinner = new JSpinner(new SpinnerNumberModel(60, 30, 180, 10));
         timeoutPanel.add(scanTimeoutSpinner);
-        performancePanel.add(timeoutPanel);
+        performanceContentPanel.add(timeoutPanel);
 
-        tabbedPane.addTab("性能优化", performancePanel);
+        // 静默保存设置
+        JPanel autoSavePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 5));
+        autoSavePanel.setBorder(BorderFactory.createTitledBorder(
+            BorderFactory.createEtchedBorder(), 
+            RequestManBundle.message("settings.autosave.title")
+        ));
+        autoSaveCheckBox = new JCheckBox(RequestManBundle.message("settings.autosave.enable"));
+        autoSaveCheckBox.setToolTipText(RequestManBundle.message("settings.autosave.tip"));
+        autoSavePanel.add(autoSaveCheckBox);
+        JLabel autoSaveTipLabel = new JLabel(RequestManBundle.message("settings.autosave.tip"));
+        autoSaveTipLabel.setForeground(Color.GRAY);
+        autoSaveTipLabel.setFont(autoSaveTipLabel.getFont().deriveFont(Font.ITALIC, autoSaveTipLabel.getFont().getSize() - 1));
+        autoSavePanel.add(autoSaveTipLabel);
+        performanceContentPanel.add(autoSavePanel);
+        
+        performancePanel.add(performanceContentPanel, BorderLayout.NORTH);
+        
+        // 加载静默保存配置
+        boolean savedAutoSave = PropertiesComponent.getInstance().getBoolean("requestman.autoSave", false);
+        autoSaveCheckBox.setSelected(savedAutoSave);
+
+        tabbedPane.addTab(RequestManBundle.message("settings.tab.performance"), performancePanel);
         // 组件创建后，再切换 tab
         SwingUtilities.invokeLater(() -> {
             if (tabbedPane != null && defaultTabIndex >= 0 && defaultTabIndex < tabbedPane.getTabCount()) {
@@ -244,12 +342,16 @@ public class RequestManSettingsConfigurable implements Configurable {
         boolean savedPerformanceMonitoring = PropertiesComponent.getInstance().getBoolean("requestman.performanceMonitoring", false);
         int savedScanTimeout = getIntValue("requestman.scanTimeout", 60);
         int savedFontSize = getIntValue("requestman.searchFontSize", getDefaultFontSize());
+        boolean savedAutoSave = PropertiesComponent.getInstance().getBoolean("requestman.autoSave", false);
+        String savedLanguage = LanguageManager.getLanguageCode();
 
         String curMode = initSearchRadio != null && initSearchRadio.isSelected() ? "init" : "instant";
         boolean curLibs = includeLibsCheckBox != null && includeLibsCheckBox.isSelected();
         boolean curPerformanceMonitoring = enablePerformanceMonitoringCheckBox != null && enablePerformanceMonitoringCheckBox.isSelected();
         int curScanTimeout = scanTimeoutSpinner != null ? (Integer) scanTimeoutSpinner.getValue() : 30;
         int curFontSize = searchFontSizeSpinner != null ? (Integer) searchFontSizeSpinner.getValue() : getDefaultFontSize();
+        boolean curAutoSave = autoSaveCheckBox != null && autoSaveCheckBox.isSelected();
+        String curLanguage = getSelectedLanguageCode();
 
         // 检查全局变量是否有未保存的修改
         boolean variableChanged = variablePanel != null && variablePanel.hasUnsavedChanges();
@@ -261,6 +363,8 @@ public class RequestManSettingsConfigurable implements Configurable {
                 savedPerformanceMonitoring != curPerformanceMonitoring ||
                 savedScanTimeout != curScanTimeout ||
                 savedFontSize != curFontSize ||
+                savedAutoSave != curAutoSave ||
+                !Objects.equals(savedLanguage, curLanguage) ||
                 variableChanged;
     }
 
@@ -307,8 +411,24 @@ public class RequestManSettingsConfigurable implements Configurable {
         int fontSize = searchFontSizeSpinner != null ? (Integer) searchFontSizeSpinner.getValue() : getDefaultFontSize();
         PropertiesComponent.getInstance().setValue("requestman.searchFontSize", String.valueOf(fontSize));
 
+        // 保存静默保存设置
+        boolean autoSave = autoSaveCheckBox != null && autoSaveCheckBox.isSelected();
+        PropertiesComponent.getInstance().setValue("requestman.autoSave", autoSave);
+
+        // 保存语言并触发刷新
+        String languageCode = getSelectedLanguageCode();
+        LanguageManager.setLanguage(languageCode);
+
+        // 通知RequestManPanel更新自动保存设置
+        if (currentProject != null) {
+            RequestManPanel requestManPanel = RequestManPanel.findRequestManPanel(currentProject);
+            if (requestManPanel != null) {
+                requestManPanel.updateAutoSaveSetting();
+            }
+        }
+
         // 刷新字体缓存，使设置立即生效
-        ApiSearchPopup.refreshFont();
+        FontManager.refreshFont();
 
         // 自动保存全局变量的修改
         if (variablePanel != null) {
@@ -389,6 +509,12 @@ public class RequestManSettingsConfigurable implements Configurable {
                 String currentEnvironment = EnvironmentManagerPanel.getEnvironmentConfig(currentProject);
                 PropertiesComponent.getInstance().setValue("requestman.environmentConfig", currentEnvironment);
             }
+        }
+
+        // 语言选择
+        String langCode = LanguageManager.getLanguageCode();
+        if (languageComboBox != null) {
+            languageComboBox.setSelectedIndex("zh_CN".equals(langCode) ? 1 : 0);
         }
     }
 
@@ -479,7 +605,7 @@ public class RequestManSettingsConfigurable implements Configurable {
             String report = PerformanceMonitor.getPerformanceReport();
 
             // 创建对话框
-            JDialog dialog = new JDialog((java.awt.Frame) null, "RequestMan 性能报告", true);
+            JDialog dialog = new JDialog((java.awt.Frame) null, RequestManBundle.message("settings.performance.report.title"), true);
             dialog.setLayout(new BorderLayout(10, 10));
 
             // 创建文本区域显示报告
@@ -495,8 +621,8 @@ public class RequestManSettingsConfigurable implements Configurable {
 
             // 创建按钮面板
             JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
-            JButton closeButton = new JButton("关闭");
-            JButton clearButton = new JButton("清除统计数据");
+            JButton closeButton = new JButton(RequestManBundle.message("settings.performance.report.close"));
+            JButton clearButton = new JButton(RequestManBundle.message("settings.performance.report.clear"));
 
             closeButton.addActionListener(e -> dialog.dispose());
             clearButton.addActionListener(e -> {
@@ -519,8 +645,8 @@ public class RequestManSettingsConfigurable implements Configurable {
 
         } catch (Exception e) {
             JOptionPane.showMessageDialog(null,
-                    "获取性能报告失败: " + e.getMessage(),
-                    "错误",
+                    "Failed to get performance report: " + e.getMessage(),
+                    "Error",
                     JOptionPane.ERROR_MESSAGE);
         }
     }
@@ -546,5 +672,16 @@ public class RequestManSettingsConfigurable implements Configurable {
         }
 
         return changed;
+    }
+
+    /**
+     * 获取下拉选中的语言代码
+     */
+    private String getSelectedLanguageCode() {
+        if (languageComboBox == null) {
+            return LanguageManager.getLanguageCode();
+        }
+        int idx = languageComboBox.getSelectedIndex();
+        return idx == 1 ? "zh_CN" : "en";
     }
 }

@@ -7,10 +7,12 @@ import com.ljh.request.requestman.ui.JsonPathExtractorDialog;
 import org.apache.commons.lang3.StringUtils;
 
 import javax.swing.*;
+import com.ljh.request.requestman.util.RequestManBundle;
 import javax.swing.table.DefaultTableModel;
 import javax.swing.table.TableCellEditor;
 import javax.swing.table.TableCellRenderer;
 import java.awt.*;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -21,7 +23,7 @@ import java.util.List;
  */
 public class PostOpPanel extends JPanel {
     private static final Dimension PARAM_PANEL_SIZE = new Dimension(600, 120);
-    private static final String[] TYPE_OPTIONS = {"JSONPath表达式", "文本"};
+    private static final String[] TYPE_OPTIONS = {"JSONPath", "TEXT"};
     private final DefaultTableModel tableModel;
     private final JTable table;
     private javax.swing.event.TableModelListener addRowListener;
@@ -33,7 +35,7 @@ public class PostOpPanel extends JPanel {
 
     public PostOpPanel() {
         super(new BorderLayout());
-        String[] columnNames = {"变量名称", "类型", "变量值", ""};
+        String[] columnNames = {RequestManBundle.message("postop.col.name"), RequestManBundle.message("postop.col.type"), RequestManBundle.message("postop.col.value")};
         tableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -55,7 +57,7 @@ public class PostOpPanel extends JPanel {
                 if (column == 2) {
                     // 检查当前行的类型是否为JSONPath表达式
                     String type = (String) getValueAt(row, 1);
-                    if ("JSONPath表达式".equals(type)) {
+                    if ("JSONPath".equals(type)) {
                         return new JsonPathValueEditor();
                     }
                 }
@@ -67,7 +69,7 @@ public class PostOpPanel extends JPanel {
                 if (column == 2) {
                     // 检查当前行的类型是否为JSONPath表达式
                     String type = (String) getValueAt(row, 1);
-                    if ("JSONPath表达式".equals(type)) {
+                    if ("JSONPath".equals(type)) {
                         return new JsonPathValueRenderer();
                     }
                 }
@@ -101,7 +103,7 @@ public class PostOpPanel extends JPanel {
 
         // 右键菜单支持删除行
         JPopupMenu popupMenu = new JPopupMenu();
-        JMenuItem deleteItem = new JMenuItem("删除");
+        JMenuItem deleteItem = new JMenuItem(RequestManBundle.message("common.delete"));
         deleteItem.addActionListener(e -> {
             int row = table.getSelectedRow();
             if (row >= 0 && row < tableModel.getRowCount() - 1) {
@@ -205,7 +207,7 @@ public class PostOpPanel extends JPanel {
             panel = new JPanel(new BorderLayout(2, 0));
             textField = new JTextField();
             extractButton = new JButton("📋");
-            extractButton.setToolTipText("JSONPath提取器");
+            extractButton.setToolTipText(RequestManBundle.message("jsonpath.title"));
             extractButton.setPreferredSize(new Dimension(25, 20));
             extractButton.setFont(new Font("Dialog", Font.PLAIN, 10));
 
@@ -275,7 +277,7 @@ public class PostOpPanel extends JPanel {
             textField = new JTextField();
             textField.setEditable(false);
             extractButton = new JButton("📋");
-            extractButton.setToolTipText("JSONPath提取器");
+            extractButton.setToolTipText(RequestManBundle.message("jsonpath.extractor.tooltip"));
             extractButton.setPreferredSize(new Dimension(25, 20));
             extractButton.setFont(new Font("Dialog", Font.PLAIN, 10));
 
@@ -316,7 +318,9 @@ public class PostOpPanel extends JPanel {
     /**
      * 后置操作参数数据结构
      */
-    public static class PostOpItem {
+    public static class PostOpItem  implements Serializable {
+
+        private static final long serialVersionUID = 7929475524342962850L;
         public String name;
         public String type;
         public String value;
@@ -325,6 +329,18 @@ public class PostOpPanel extends JPanel {
             this.name = name;
             this.type = type;
             this.value = value;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public String getValue() {
+            return value;
         }
     }
 } 

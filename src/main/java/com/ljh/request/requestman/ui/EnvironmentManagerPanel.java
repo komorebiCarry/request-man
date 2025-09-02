@@ -7,6 +7,7 @@ import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.table.JBTable;
 import com.ljh.request.requestman.model.Environment;
 import com.ljh.request.requestman.util.ProjectSettingsManager;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import javax.swing.event.TableModelEvent;
@@ -41,8 +42,8 @@ public class EnvironmentManagerPanel extends JPanel {
             }
         };
         this.environmentTable = new JBTable(tableModel);
-        this.addButton = new JButton("添加环境");
-        this.deleteButton = new JButton("删除环境");
+        this.addButton = new JButton(RequestManBundle.message("env.add"));
+        this.deleteButton = new JButton(RequestManBundle.message("env.delete"));
 
         initComponents();
         loadEnvironments();
@@ -52,7 +53,7 @@ public class EnvironmentManagerPanel extends JPanel {
         setLayout(new BorderLayout());
 
         // 初始化表格 - 添加隐藏的ID列
-        tableModel.setColumnIdentifiers(new String[]{"ID", "环境名称", "前置URL"});
+        tableModel.setColumnIdentifiers(new String[]{"ID", RequestManBundle.message("env.name"), RequestManBundle.message("env.preurl")});
         environmentTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         environmentTable.getTableHeader().setReorderingAllowed(false);
 
@@ -155,14 +156,14 @@ public class EnvironmentManagerPanel extends JPanel {
     private void editSelectedEnvironment() {
         int selectedRow = environmentTable.getSelectedRow();
         if (selectedRow == -1) {
-            Messages.showWarningDialog(this, "请先选择一个环境", "提示");
+            Messages.showWarningDialog(this, RequestManBundle.message("env.select.first"), RequestManBundle.message("main.tip"));
             return;
         }
 
         String envId = (String) tableModel.getValueAt(selectedRow, 0);
         Environment env = ProjectSettingsManager.getEnvironmentById(project, envId);
         if (env == null) {
-            Messages.showErrorDialog(this, "找不到环境配置", "错误");
+            Messages.showErrorDialog(this, RequestManBundle.message("env.notfound"), RequestManBundle.message("common.error"));
             return;
         }
 
@@ -189,7 +190,7 @@ public class EnvironmentManagerPanel extends JPanel {
     private void deleteSelectedEnvironment() {
         int selectedRow = environmentTable.getSelectedRow();
         if (selectedRow == -1) {
-            Messages.showWarningDialog(this, "请先选择一个环境", "提示");
+            Messages.showWarningDialog(this, RequestManBundle.message("env.select.first"), RequestManBundle.message("main.tip"));
             return;
         }
 
@@ -197,13 +198,13 @@ public class EnvironmentManagerPanel extends JPanel {
         String envName = (String) tableModel.getValueAt(selectedRow, 1);
         Environment env = ProjectSettingsManager.getEnvironmentById(project, envId);
         if (env == null) {
-            Messages.showErrorDialog(this, "找不到环境配置", "错误");
+            Messages.showErrorDialog(this, RequestManBundle.message("env.notfound"), RequestManBundle.message("common.error"));
             return;
         }
 
         int result = Messages.showYesNoDialog(this,
-                "确定要删除环境 '" + envName + "' 吗？",
-                "确认删除",
+                RequestManBundle.message("env.delete.confirm", envName),
+                RequestManBundle.message("env.delete.title"),
                 Messages.getQuestionIcon());
 
         if (result == Messages.YES) {
@@ -271,14 +272,14 @@ public class EnvironmentManagerPanel extends JPanel {
                                 .anyMatch(e -> e.getName().equals(envName) && !e.getId().equals(env.getId()));
 
                         if (nameExists) {
-                            Messages.showErrorDialog(this, "环境名称已存在", "错误");
+                            Messages.showErrorDialog(this, RequestManBundle.message("env.name.exists"), RequestManBundle.message("common.error"));
                             // 恢复原值
                             loadEnvironments();
                             return;
                         }
                         env.setName(envName.trim());
                     } else {
-                        Messages.showErrorDialog(this, "环境名称不能为空", "错误");
+                        Messages.showErrorDialog(this, RequestManBundle.message("env.name.empty"), RequestManBundle.message("common.error"));
                         // 恢复原值
                         loadEnvironments();
                         return;
@@ -325,9 +326,9 @@ public class EnvironmentManagerPanel extends JPanel {
             this.nameField = new JTextField();
             this.preUrlField = new JTextField();
 
-            setTitle(environment == null ? "添加环境" : "编辑环境");
-            setOKButtonText("确定");
-            setCancelButtonText("取消");
+            setTitle(environment == null ? RequestManBundle.message("env.dialog.add.title") : RequestManBundle.message("env.dialog.edit.title"));
+            setOKButtonText(RequestManBundle.message("common.ok"));
+            setCancelButtonText(RequestManBundle.message("common.cancel"));
 
             // 确保在init()之前设置所有必要的属性
             setResizable(false);
@@ -347,7 +348,7 @@ public class EnvironmentManagerPanel extends JPanel {
             // 环境名称
             gbc.gridx = 0;
             gbc.gridy = 0;
-            panel.add(new JLabel("环境名称:"), gbc);
+            panel.add(new JLabel(RequestManBundle.message("env.name") + ":"), gbc);
             gbc.gridx = 1;
             gbc.gridy = 0;
             gbc.fill = GridBagConstraints.HORIZONTAL;
@@ -359,7 +360,7 @@ public class EnvironmentManagerPanel extends JPanel {
             gbc.gridy = 1;
             gbc.fill = GridBagConstraints.NONE;
             gbc.weightx = 0.0;
-            panel.add(new JLabel("前置URL:"), gbc);
+            panel.add(new JLabel(RequestManBundle.message("env.preurl") + ":"), gbc);
             gbc.gridx = 1;
             gbc.gridy = 1;
             gbc.fill = GridBagConstraints.HORIZONTAL;
@@ -386,7 +387,7 @@ public class EnvironmentManagerPanel extends JPanel {
         protected void doOKAction() {
             String name = nameField.getText().trim();
             if (name.isEmpty()) {
-                Messages.showErrorDialog(this.getContentPane(), "环境名称不能为空", "错误");
+                Messages.showErrorDialog(this.getContentPane(), RequestManBundle.message("env.name.empty"), RequestManBundle.message("common.error"));
                 return;
             }
 
@@ -397,7 +398,7 @@ public class EnvironmentManagerPanel extends JPanel {
                             (environment == null || !env.getId().equals(environment.getId())));
 
             if (nameExists) {
-                Messages.showErrorDialog(this.getContentPane(), "环境名称已存在", "错误");
+                Messages.showErrorDialog(this.getContentPane(), RequestManBundle.message("env.name.exists"), RequestManBundle.message("common.error"));
                 return;
             }
 

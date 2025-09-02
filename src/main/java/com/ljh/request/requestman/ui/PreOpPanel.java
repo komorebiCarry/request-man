@@ -2,6 +2,7 @@ package com.ljh.request.requestman.ui;
 
 import javax.swing.*;
 import java.awt.*;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 /**
  * @author leijianhui
@@ -13,7 +14,7 @@ public class PreOpPanel extends JPanel {
 
     public PreOpPanel() {
         super(new BorderLayout());
-        String[] columnNames = {"操作名", "参数", "说明", ""};
+        String[] columnNames = {RequestManBundle.message("preop.col.name"), RequestManBundle.message("preop.col.param"), RequestManBundle.message("preop.col.desc"), ""};
         Object[][] data = {};
         JTable table = new JTable(data, columnNames) {
             @Override

@@ -150,4 +150,10 @@ public class ParamsPanel extends JPanel {
         }
         return list;
     }
+
+    public void setParamsData(List<ApiParam> params) {
+        for (int i = 0; i < Math.min(paramTable.getRowCount(), params.size()); i++) {
+            paramTable.setValueAt(params.get(i).getValue(), i, 1);
+        }
+    }
 } 

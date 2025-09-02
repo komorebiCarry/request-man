@@ -554,15 +554,15 @@ public class ProjectSettingsManager {
         List<Environment> environments = new ArrayList<>();
 
         // 创建开发环境
-        Environment devEnv = new Environment("开发环境", "");
+        Environment devEnv = new Environment("dev", "");
         environments.add(devEnv);
 
         // 创建测试环境
-        Environment testEnv = new Environment("测试环境", "");
+        Environment testEnv = new Environment("test", "");
         environments.add(testEnv);
 
         // 创建正式环境
-        Environment prodEnv = new Environment("正式环境", "");
+        Environment prodEnv = new Environment("prod", "");
         environments.add(prodEnv);
 
         // 保存到缓存和持久化

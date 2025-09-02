@@ -27,7 +27,7 @@ dependencies {
             providers.gradleProperty("platformVersion"),
             true
         )
-            bundledPlugin("com.intellij.java")
+        bundledPlugin("com.intellij.java")
 
     }
     implementation("cn.hutool:hutool-all:5.8.26")
@@ -41,47 +41,56 @@ intellijPlatform {
         name = "RequestMan"
         version = "1.0.1"
         description = """
-            <b>RequestMan</b> - A powerful API testing and documentation generation tool integrated into IntelliJ IDEA. Supports both "API scanning mode" and "custom API mode" for efficient development and API management.<br>
+            <b>RequestMan</b> - A powerful API testing and documentation generation tool integrated into IntelliJ IDEA. 
+            Supports both automatic API scanning and custom API management with multilingual support (English/Chinese).<br>
             <br>
             <b>RequestMan</b> - 一款集成于 IntelliJ IDEA 的接口调试与文档生成工具，支持"接口扫描模式"与"自定义接口模式"自由切换，助力高效开发与接口管理。<br>
             <br>
-            <b>核心功能：</b>
+            <b>Key Features / 核心功能：</b>
             <ul>
-              <li><b>智能接口扫描：</b> 一键扫描项目中的 Spring 接口（<code>@RestController</code>、<code>@RequestMapping</code>），自动生成接口列表、参数结构，支持文档预览与 JSON 示例生成</li>
-              <li><b>自定义接口管理：</b> 手动添加、编辑、保存自定义 API，支持多种请求体类型、认证、后置操作等高级功能</li>
-              <li><b>环境与变量管理：</b> 支持多环境配置，全局变量管理，使用 <code>{{变量名}}</code> 动态引用</li>
-              <li><b>高效搜索定位：</b> 快捷键 <b>Ctrl+Alt+/</b> 一键搜索，支持按 URL、方法名、三方包等多维度检索</li>
-              <li><b>响应处理与文档：</b> 响应折叠、JSON 格式化、文档预览、内置 JSONPath 提取器</li>
-              <li><b>接口导入导出：</b> 支持接口集合的导入导出，使用标准 JSON 格式进行数据交换</li>
+              <li><b>Smart API Scanning / 智能接口扫描：</b> Automatically scan Spring APIs (@RestController, @RequestMapping), generate API lists and parameter structures with documentation preview / 一键扫描项目中的 Spring 接口，自动生成接口列表、参数结构，支持文档预览与 JSON 示例生成</li>
+              <li><b>Custom API Management / 自定义接口管理：</b> Manually add, edit, and save custom APIs with support for various request body types, authentication, and post-operations / 手动添加、编辑、保存自定义 API，支持多种请求体类型、认证、后置操作等高级功能</li>
+              <li><b>Environment & Variable Management / 环境与变量管理：</b> Support multi-environment configuration and global variable management with <code>{{variable}}</code> syntax / 支持多环境配置，全局变量管理，使用 <code>{{变量名}}</code> 动态引用</li>
+              <li><b>Quick Search & Location / 高效搜索定位：</b> Use <b>Ctrl+Alt+/</b> for instant API search by URL, method name, or third-party packages / 快捷键 <b>Ctrl+Alt+/</b> 一键搜索，支持按 URL、方法名、三方包等多维度检索</li>
+              <li><b>Panel Quick Access / 面板快速访问：</b> Use <b>Ctrl+Alt+Shift+Z</b> to quickly show/hide the RequestMan tool window / 快捷键 <b>Ctrl+Alt+Shift+Z</b> 快速显示/隐藏 RequestMan 工具窗口</li>
+              <li><b>Response Processing / 响应处理与文档：</b> Response folding, JSON formatting, documentation preview, and built-in JSONPath extractor / 响应折叠、JSON 格式化、文档预览、内置 JSONPath 提取器</li>
+              <li><b>Import/Export / 接口导入导出：</b> Support API collection import/export using standard JSON format / 支持接口集合的导入导出，使用标准 JSON 格式进行数据交换</li>
+              <li><b>Multilingual Support / 多语言支持：</b> Full internationalization support for English and Chinese interfaces / 完整的英文和中文界面本地化支持</li>
+              <li><b>Performance Optimization / 性能优化：</b> Configurable scanning timeout, caching, and performance monitoring / 可配置的扫描超时、缓存和性能监控</li>
             </ul>
             <br>
-            <b>快速开始：</b>
+            <b>Quick Start / 快速开始：</b>
             <ol>
-              <li><b>插件设置：</b> 在 IDEA 设置中选择 <b>RequestMan Settings</b>，配置环境管理和全局变量</li>
-              <li><b>接口扫描：</b> 打开工具窗口，点击"刷新接口"自动扫描 Spring 接口，选择接口进行调试</li>
-              <li><b>自定义接口：</b> 切换模式，点击"新增接口"创建自定义 API，支持多种 Body 类型和后置操作</li>
-              <li><b>接口搜索：</b> 按 <b>Ctrl+Alt+/</b> 快速搜索和定位接口</li>
-              <li><b>变量引用：</b> 在参数中使用 <code>{{变量名}}</code> 动态引用全局变量</li>
+              <li><b>Settings / 插件设置：</b> Go to <b>Settings > RequestMan Settings</b> to configure environments and global variables / 在 IDEA 设置中选择 <b>RequestMan Settings</b>，配置环境管理和全局变量</li>
+              <li><b>API Scanning / 接口扫描：</b> Open the tool window, click "Refresh APIs" to automatically scan Spring APIs / 打开工具窗口，点击"刷新接口"自动扫描 Spring 接口，选择接口进行调试</li>
+              <li><b>Custom APIs / 自定义接口：</b> Switch mode and click "Add API" to create custom APIs with various body types / 切换模式，点击"新增接口"创建自定义 API，支持多种 Body 类型和后置操作</li>
+              <li><b>API Search / 接口搜索：</b> Press <b>Ctrl+Alt+/</b> for quick API search and navigation / 按 <b>Ctrl+Alt+/</b> 快速搜索和定位接口</li>
+              <li><b>Panel Access / 面板访问：</b> Press <b>Ctrl+Alt+Shift+Z</b> to quickly show/hide the RequestMan tool window / 按 <b>Ctrl+Alt+Shift+Z</b> 快速显示/隐藏 RequestMan 工具窗口</li>
+              <li><b>Variable Usage / 变量引用：</b> Use <code>{{variable}}</code> syntax in parameters to reference global variables / 在参数中使用 <code>{{变量名}}</code> 动态引用全局变量</li>
             </ol>
             <br>
         """.trimIndent()
-        
+
         ideaVersion {
-            sinceBuild = "251"
+            sinceBuild = "241"
         }
 
         changeNotes = """
-            <b>1.0.1</b> - API 兼容性与性能优化
+            <b>Version 1.0.1 - Features & Bug Fixes / 版本 1.0.1 - 功能与Bug修复</b>
             <ul>
-              <li><b>API 兼容性：</b> 替换弃用 API 和实验性 API，使用稳定替代方案</li>
-              <li><b>问题修复：</b> 修复 UI 组件中实验性 API 使用警告</li>
+              <li><b>New / 新增：</b> Path parameter dynamic URL update functionality / Path参数动态URL更新功能</li>
+              <li><b>New / 新增：</b> Auto-save control feature with user preference options / 自动保存控制功能，支持用户偏好设置</li>
+              <li><b>New / 新增：</b> JSON structure panel with recursive structure support for complex nested parameters / JSON结构面板，支持递归结构，可处理复杂的嵌套参数</li>
+              <li><b>Improved / 改进：</b> Path parameter functionality with fixed listener issues and entity recursion / 改进Path参数功能，修复监听器问题和实体递归</li>
+              <li><b>API Compatibility / API兼容性：</b> Replaced deprecated and experimental APIs with stable alternatives / 用稳定的替代方案替换已弃用和实验性API</li>
+              <li><b>Bug Fix / Bug修复：</b> Fixed experimental API usage warnings in UI components / 修复UI组件中的实验性API使用警告</li>
             </ul>
             
-            <b>1.0.0</b> - 主要版本发布与代码优化
+            <b>Version 1.0.0 - Initial Stable Release / 版本 1.0.0 - 初始稳定版本</b>
             <ul>
-              <li><b>主要版本：</b> 稳定的 1.0.0 版本，包含完整功能集</li>
-              <li><b>代码优化：</b> 重构和优化代码库，提升可维护性</li>
-              <li><b>文档完善：</b> 增强插件文档和用户指南</li>
+              <li><b>Stable Release / 稳定版本：</b> First stable 1.0.0 version with complete feature set / 首个稳定的1.0.0版本，包含完整功能集</li>
+              <li><b>Code Optimization / 代码优化：</b> Refactored and optimized codebase for better maintainability / 重构和优化代码库，提升可维护性</li>
+              <li><b>Documentation / 文档：</b> Enhanced plugin documentation and user guides / 增强插件文档和用户指南</li>
             </ul>
         """.trimIndent()
     }
@@ -90,11 +99,11 @@ intellijPlatform {
 tasks {
     // Set the JVM compatibility versions
     withType<JavaCompile> {
-        sourceCompatibility = "21"
-        targetCompatibility = "21"
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
         options.compilerArgs.add("-Xlint:unchecked")
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "21"
+        kotlinOptions.jvmTarget = "17"
     }
 }

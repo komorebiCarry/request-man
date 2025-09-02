@@ -2,6 +2,7 @@ package com.ljh.request.requestman.ui;
 
 import com.ljh.request.requestman.util.JsonPathExtractor;
 import com.ljh.request.requestman.util.JsonPathExtractor.JsonPathField;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -32,7 +33,7 @@ public class JsonPathExtractorDialog extends JDialog {
     private boolean confirmed = false;
 
     public JsonPathExtractorDialog(Frame owner, String initialJson) {
-        super(owner, "JSONPath 提取工具", true);
+        super(owner, RequestManBundle.message("jsonpath.title"), true);
 
         // 初始化组件
         jsonTextArea = new JTextArea();
@@ -40,7 +41,7 @@ public class JsonPathExtractorDialog extends JDialog {
         resultArea = new JTextArea();
 
         // 设置表格
-        String[] columnNames = {"字段路径", "类型", "值"};
+        String[] columnNames = {RequestManBundle.message("jsonpath.col.path"), RequestManBundle.message("jsonpath.col.type"), RequestManBundle.message("jsonpath.col.value")};
         tableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -114,9 +115,9 @@ public class JsonPathExtractorDialog extends JDialog {
 
         // JSONPath表达式面板
         JPanel jsonPathPanel = new JPanel(new BorderLayout(5, 5));
-        jsonPathPanel.setBorder(BorderFactory.createTitledBorder("JSONPath 表达式"));
+        jsonPathPanel.setBorder(BorderFactory.createTitledBorder(RequestManBundle.message("jsonpath.expr.title")));
 
-        JLabel descLabel = new JLabel("<html>可以在左侧任意一个字段上点击来快速填写<br>如: $.data.api_token[0].token</html>");
+        JLabel descLabel = new JLabel(RequestManBundle.message("jsonpath.expr.hint"));
         descLabel.setBorder(new EmptyBorder(5, 5, 5, 5));
         jsonPathPanel.add(descLabel, BorderLayout.NORTH);
 
@@ -129,7 +130,7 @@ public class JsonPathExtractorDialog extends JDialog {
 
         // 提取结果面板
         JPanel resultPanel = new JPanel(new BorderLayout(5, 5));
-        resultPanel.setBorder(BorderFactory.createTitledBorder("提取结果"));
+        resultPanel.setBorder(BorderFactory.createTitledBorder(RequestManBundle.message("jsonpath.result.title")));
 
         JScrollPane resultScrollPane = new JScrollPane(resultArea);
         resultScrollPane.setPreferredSize(new Dimension(350, 150));
@@ -143,7 +144,7 @@ public class JsonPathExtractorDialog extends JDialog {
 
         // 字段列表面板
         JPanel fieldsPanel = new JPanel(new BorderLayout(5, 5));
-        fieldsPanel.setBorder(BorderFactory.createTitledBorder("字段列表"));
+        fieldsPanel.setBorder(BorderFactory.createTitledBorder(RequestManBundle.message("jsonpath.fields.title")));
 
         JScrollPane tableScrollPane = new JScrollPane(fieldsTable);
         tableScrollPane.setPreferredSize(new Dimension(0, 200));
@@ -151,8 +152,8 @@ public class JsonPathExtractorDialog extends JDialog {
 
         // 按钮面板
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton confirmButton = new JButton("确定");
-        JButton cancelButton = new JButton("取消");
+        JButton confirmButton = new JButton(RequestManBundle.message("common.ok"));
+        JButton cancelButton = new JButton(RequestManBundle.message("common.cancel"));
 
         buttonPanel.add(confirmButton);
         buttonPanel.add(cancelButton);
@@ -243,7 +244,7 @@ public class JsonPathExtractorDialog extends JDialog {
         });
 
         // 确定按钮
-        JButton confirmButton = findButton("确定");
+        JButton confirmButton = findButton(RequestManBundle.message("common.ok"));
         if (confirmButton != null) {
             confirmButton.addActionListener(e -> {
                 selectedJsonPath = jsonPathField.getText();
@@ -253,7 +254,7 @@ public class JsonPathExtractorDialog extends JDialog {
         }
 
         // 取消按钮
-        JButton cancelButton = findButton("取消");
+        JButton cancelButton = findButton(RequestManBundle.message("common.cancel"));
         if (cancelButton != null) {
             cancelButton.addActionListener(e -> {
                 selectedJsonPath = ""; // 重置选中的JSONPath
@@ -319,7 +320,7 @@ public class JsonPathExtractorDialog extends JDialog {
         String jsonPath = jsonPathField.getText();
 
         if (json == null || json.trim().isEmpty() || jsonPath == null || jsonPath.trim().isEmpty()) {
-            resultArea.setText("不匹配");
+            resultArea.setText(RequestManBundle.message("jsonpath.no.match"));
             return;
         }
 
@@ -328,10 +329,10 @@ public class JsonPathExtractorDialog extends JDialog {
             if (result != null) {
                 resultArea.setText(result);
             } else {
-                resultArea.setText("不匹配");
+                resultArea.setText(RequestManBundle.message("jsonpath.no.match"));
             }
         } catch (Exception e) {
-            resultArea.setText("提取失败: " + e.getMessage());
+            resultArea.setText(RequestManBundle.message("jsonpath.extract.fail") + e.getMessage());
         }
     }
 

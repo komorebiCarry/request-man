@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.intellij.openapi.project.Project;
 import com.ljh.request.requestman.ui.PostOpPanel.PostOpItem;
 import com.ljh.request.requestman.ui.VariablePanel;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import java.util.List;
 import java.util.regex.Matcher;
@@ -32,9 +33,9 @@ public class PostOpExecutor {
                 continue;
             }
             String result = null;
-            if ("JSONPath表达式".equals(item.type)) {
+            if ("JSONPath".equals(item.type)) {
                 result = extractByJsonPathWithAffix(responseBody, item.value);
-            } else if ("文本".equals(item.type)) {
+            } else if ("TEXT".equals(item.type)) {
                 result = extractByRegex(responseBody, item.value);
             }
             if (result != null) {

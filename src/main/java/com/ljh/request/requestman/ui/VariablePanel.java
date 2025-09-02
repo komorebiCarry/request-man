@@ -2,6 +2,7 @@ package com.ljh.request.requestman.ui;
 
 import com.intellij.openapi.project.Project;
 import com.ljh.request.requestman.util.VariableManager;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
@@ -34,7 +35,7 @@ public class VariablePanel extends JPanel {
         this.currentProject = project;
         instance = this;
 
-        String[] columnNames = {"变量名", "变量值"};
+        String[] columnNames = {RequestManBundle.message("variable.col.name"), RequestManBundle.message("variable.col.value")};
         tableModel = new DefaultTableModel(columnNames, 0) {
             @Override
             public boolean isCellEditable(int row, int column) {
@@ -48,10 +49,10 @@ public class VariablePanel extends JPanel {
 
         // 按钮区
         JPanel btnPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        addButton = new JButton("新增");
-        deleteButton = new JButton("删除");
-        saveButton = new JButton("保存");
-        clearButton = new JButton("清空");
+        addButton = new JButton(RequestManBundle.message("variable.add"));
+        deleteButton = new JButton(RequestManBundle.message("variable.delete"));
+        saveButton = new JButton(RequestManBundle.message("variable.save"));
+        clearButton = new JButton(RequestManBundle.message("variable.clear"));
         btnPanel.add(addButton);
         btnPanel.add(deleteButton);
         btnPanel.add(saveButton);
@@ -76,7 +77,7 @@ public class VariablePanel extends JPanel {
         saveButton.addActionListener(e -> saveAll());
         // 清空按钮事件
         clearButton.addActionListener(e -> {
-            int confirm = JOptionPane.showConfirmDialog(this, "确定要清空所有变量吗？", "确认", JOptionPane.YES_NO_OPTION);
+            int confirm = JOptionPane.showConfirmDialog(this, RequestManBundle.message("variable.clear.confirm"), RequestManBundle.message("common.confirm"), JOptionPane.YES_NO_OPTION);
             if (confirm == JOptionPane.YES_OPTION) {
                 if (currentProject != null) {
                     VariableManager.clear(currentProject);
@@ -122,12 +123,12 @@ public class VariablePanel extends JPanel {
      */
     private void saveAll() {
         if (currentProject == null) {
-            JOptionPane.showMessageDialog(this, "无法获取当前项目，保存失败！", "错误", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, RequestManBundle.message("variable.save.no.project"), RequestManBundle.message("common.error"), JOptionPane.ERROR_MESSAGE);
             return;
         }
 
         saveAllInternal();
-        JOptionPane.showMessageDialog(this, "保存成功！", "提示", JOptionPane.INFORMATION_MESSAGE);
+        JOptionPane.showMessageDialog(this, RequestManBundle.message("common.save.success"), RequestManBundle.message("main.tip"), JOptionPane.INFORMATION_MESSAGE);
         reloadTable();
     }
 

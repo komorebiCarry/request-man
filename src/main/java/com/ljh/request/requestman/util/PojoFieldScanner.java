@@ -2,13 +2,20 @@ package com.ljh.request.requestman.util;
 
 import cn.hutool.core.util.StrUtil;
 import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.editor.Document;
 import com.intellij.openapi.project.Project;
 import com.intellij.psi.*;
 import com.intellij.psi.javadoc.PsiDocComment;
 import com.intellij.psi.search.GlobalSearchScope;
+import com.intellij.psi.search.searches.ClassInheritorsSearch;
 import com.intellij.psi.util.PsiUtil;
+import com.intellij.psi.PsiPackage;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.module.ModuleUtilCore;
+import com.intellij.util.Query;
 import com.ljh.request.requestman.enums.ParamDataType;
 import com.ljh.request.requestman.model.ApiParam;
+import com.ljh.request.requestman.util.DataTypeUtils;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -16,6 +23,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * @author leijianhui
@@ -27,36 +37,6 @@ public class PojoFieldScanner {
      * Java 标准包前缀
      */
     private static final String JAVA_PACKAGE_PREFIX = "java.";
-    /**
-     * List 类型全限定名
-     */
-    private static final String LIST_CLASS = "java.util.List";
-    /**
-     * ArrayList 类型全限定名
-     */
-    private static final String ARRAYLIST_CLASS = "java.util.ArrayList";
-    private static final String STRING_TYPE = "String";
-    private static final String INT_TYPE = "int";
-    private static final String INTEGER_TYPE = "Integer";
-    private static final String LONG_TYPE = "long";
-    private static final String LONG_CLASS_TYPE = "Long";
-    private static final String SHORT_TYPE = "short";
-    private static final String SHORT_CLASS_TYPE = "Short";
-    private static final String BOOLEAN_TYPE = "boolean";
-    private static final String BOOLEAN_CLASS_TYPE = "Boolean";
-    private static final String DOUBLE_TYPE = "double";
-    private static final String DOUBLE_CLASS_TYPE = "Double";
-    private static final String FLOAT_TYPE = "float";
-    private static final String FLOAT_CLASS_TYPE = "Float";
-    private static final String BIGDECIMAL_TYPE = "BigDecimal";
-    private static final String BIGDECIMAL_FULL_TYPE = "java.math.BigDecimal";
-    private static final String MULTIPART_FILE_TYPE = "MultipartFile";
-    private static final String ARRAY_SUFFIX = "[]";
-    private static final String JAVA_STRING_TYPE = "java.lang.String";
-    private static final String LIST_TYPE = "java.util.List";
-    private static final String ARRAYLIST_TYPE = "java.util.ArrayList";
-    private static final String COLLECTION_TYPE = "java.util.Collection";
-    private static final String FILE_TYPE = "java.io.File";
     /**
      * 默认 Map 容量
      */
@@ -76,9 +56,9 @@ public class PojoFieldScanner {
      * @param project  当前 Project 对象
      * @return 参数树结构 List<ApiParam>
      */
-    public static List<ApiParam> scanPojoFields(PsiClass psiClass, Project project) {
+    public static List<ApiParam> scanPojoFields(PsiClass psiClass, Project project, ApiParam apiParam) {
         return ReadAction.compute(() ->
-                scanPojoFieldsWithGenerics(psiClass, null, new HashSet<>(DEFAULT_MAP_SIZE), new HashMap<>(DEFAULT_MAP_SIZE), project)
+                scanPojoFieldsWithGenerics(psiClass, null, new HashSet<>(DEFAULT_MAP_SIZE), new HashMap<>(DEFAULT_MAP_SIZE), project, apiParam)
         );
     }
 
@@ -92,7 +72,7 @@ public class PojoFieldScanner {
      * @param project    当前 Project 对象
      * @return 参数树结构 List<ApiParam>
      */
-    public static List<ApiParam> scanPojoFieldsWithGenerics(PsiClass psiClass, String classDoc, Set<String> visited, Map<String, PsiType> genericMap, Project project) {
+    public static List<ApiParam> scanPojoFieldsWithGenerics(PsiClass psiClass, String classDoc, Set<String> visited, Map<String, PsiType> genericMap, Project project, ApiParam apiParam) {
         return ReadAction.compute(() -> {
             LogUtil.debug("[PojoFieldScanner] 递归类型: " + (psiClass != null ? psiClass.getQualifiedName() : "null") + ", visited: " + visited + ", 泛型映射: " + genericMap);
             List<ApiParam> params = new ArrayList<>();
@@ -100,12 +80,35 @@ public class PojoFieldScanner {
                 return params;
             }
             String classKey = psiClass.getQualifiedName();
-            // 死循环防护：只对具体类（非接口、非抽象类）做防护，接口允许递归一次
-            if (classKey != null && visited.contains(classKey) && !psiClass.isInterface() && !psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
-                return params;
-            }
-            if (classKey != null && !psiClass.isInterface() && !psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
-                visited.add(classKey);
+
+            // 分层递归防护机制
+            if (classKey != null) {
+                // 检查是否已经访问过该类
+                if (visited.contains(classKey)) {
+                    // 如果已经访问过，检查是否允许递归
+                    if (psiClass.isInterface() || psiClass.hasModifierProperty(PsiModifier.ABSTRACT)) {
+                        // 接口和抽象类允许递归一次
+                        LogUtil.debug("[PojoFieldScanner] 允许接口/抽象类递归: " + classKey);
+                    } else {
+                        // 具体类检查递归深度
+                        String recursionKey = classKey + "_recursion";
+                        if (visited.contains(recursionKey)) {
+                            // 已经递归过一次，防止无限循环
+                            LogUtil.debug("[PojoFieldScanner] 阻止无限递归: " + classKey);
+                            if (apiParam != null) {
+                                apiParam.setRecursive(true);
+                            }
+                            return params;
+                        } else {
+                            // 允许递归一次，标记递归状态
+                            visited.add(recursionKey);
+                            LogUtil.debug("[PojoFieldScanner] 允许具体类递归一次: " + classKey);
+                        }
+                    }
+                } else {
+                    // 首次访问，添加到visited集合
+                    visited.add(classKey);
+                }
             }
             // 获取类注释
             String classDesc = getClassDescription(psiClass, classDoc);
@@ -188,8 +191,8 @@ public class PojoFieldScanner {
                 desc = cleanJavaDoc(docComment.getText());
             }
         }
-
         return desc;
+
     }
 
     /**
@@ -205,13 +208,26 @@ public class PojoFieldScanner {
     public static ApiParam buildApiParamFromField(PsiField field, String classDesc, Map<String, PsiType> localGenericMap, Set<String> visited, Project project) {
         String name = field.getName();
         String desc = getClassDescription(field, null);
-        ParamDataType dataType = guessDataType(field.getType());
+        ParamDataType dataType = DataTypeUtils.guessDataType(field.getType());
         String rawType = field.getType().getPresentableText();
         ApiParam param = new ApiParam();
         param.setName(name);
         param.setDescription(desc);
         param.setDataType(dataType);
         param.setRawType(rawType);
+        // 新增：枚举类型特殊处理
+        if (dataType == ParamDataType.ENUM) {
+            // 枚举类型不需要递归扫描，但收集枚举值
+            PsiClass fieldClass = PsiUtil.resolveClassInType(field.getType());
+            if (fieldClass != null && fieldClass.isEnum()) {
+                String enumValues = getEnumValues(fieldClass);
+                if (!enumValues.isEmpty()) {
+                    String newDesc = desc.isEmpty() ? "枚举类型" : desc;
+                    param.setDescription(newDesc + " (可选值: " + enumValues + ")");
+                }
+            }
+            return param; // 枚举类型直接返回，不继续递归
+        }
         // 泛型参数递归
         if (field.getType() instanceof PsiClassType) {
             String typeName = field.getType().getCanonicalText();
@@ -220,9 +236,9 @@ public class PojoFieldScanner {
                 LogUtil.debug("[PojoFieldScanner] 泛型参数递归: " + typeName + " -> " + realType);
                 param.setRawType(realType.getPresentableText());
                 // 检查realType是否为基础类型，如果是则不需要继续递归扫描
-                ParamDataType realDataType = guessDataType(realType);
+                ParamDataType realDataType = DataTypeUtils.guessDataType(realType);
                 param.setDataType(realDataType);
-                if (realDataType == ParamDataType.OBJECT) {
+                if (realDataType == ParamDataType.OBJECT || realDataType == ParamDataType.ARRAY) {
                     handleGenericType(param, realType, visited, localGenericMap, project);
                 } else {
                     return param;
@@ -240,13 +256,14 @@ public class PojoFieldScanner {
                     param.setDescription((oldDesc == null ? "" : oldDesc) + "");
                     return param;
                 }
-                if (isCollectionType(rawClassName)) {
+                if (DataTypeUtils.isCollectionType(rawClassName)) {
                     handleCollectionType(param, typeArgs, localGenericMap, visited, project);
                 } else if (!rawClassName.startsWith(JAVA_PACKAGE_PREFIX)) {
                     handleCustomType(param, rawClass, typeArgs, visited, field.getType(), project);
                 }
             }
         }
+
         // 如果是自定义类型，类型列显示类名，注释优先显示类注释
         if (dataType == ParamDataType.OBJECT) {
             PsiClass fieldClass = PsiUtil.resolveClassInType(field.getType());
@@ -256,7 +273,7 @@ public class PojoFieldScanner {
                 if (param.getChildren() == null) {
                     param.setChildren(new ArrayList<>());
                 }
-                param.getChildren().addAll(scanPojoFieldsWithGenerics(fieldClass, classDesc, visited, localGenericMap, project));
+                param.getChildren().addAll(scanPojoFieldsWithGenerics(fieldClass, classDesc, visited, localGenericMap, project, param));
             }
         }
         return param;
@@ -271,22 +288,33 @@ public class PojoFieldScanner {
             if (realClass != null) {
                 String canonical = realClass.getQualifiedName();
                 PsiType[] typeArgs = ((PsiClassType) realType).getParameters();
-                if (isCollectionType(canonical)) {
+                if (DataTypeUtils.isCollectionType(canonical)) {
                     if (typeArgs.length == 1) {
                         PsiType elementType = typeArgs[0];
-                        ParamDataType elementDataType = guessDataType(elementType);
+                        ParamDataType elementDataType = DataTypeUtils.guessDataType(elementType);
                         param.setDataType(ParamDataType.ARRAY);
                         param.setChildren(new ArrayList<>());
                         if (elementDataType == ParamDataType.OBJECT) {
                             PsiClass elementClass = null;
-                            if (elementType instanceof PsiClassType) {
+
+                            // 处理通配符类型：? extends T 或 ? super T
+                            if (elementType instanceof PsiWildcardType wildcardType) {
+                                PsiType boundType = wildcardType.getExtendsBound();
+                                if (boundType == null) {
+                                    boundType = wildcardType.getSuperBound();
+                                }
+                                if (boundType instanceof PsiClassType) {
+                                    elementClass = ((PsiClassType) boundType).resolve();
+                                }
+                            } else if (elementType instanceof PsiClassType) {
                                 elementClass = ((PsiClassType) elementType).resolve();
                             }
+
                             if (elementClass != null) {
                                 param.setDescription(getClassDescription(elementClass));
                                 Map<String, PsiType> implTypeArgMap = new HashMap<>(DEFAULT_MAP_SIZE);
-                                implTypeArgMap.put("T", typeArgs[0]);
-                                param.setChildren(scanPojoFieldsWithGenerics(elementClass, null, visited, implTypeArgMap, project));
+                                implTypeArgMap.put("T", elementType);
+                                param.getChildren().addAll(scanPojoFieldsWithGenerics(elementClass, null, visited, implTypeArgMap, project, param));
                             }
                         }
                     }
@@ -296,7 +324,7 @@ public class PojoFieldScanner {
                     if (param.getChildren() == null) {
                         param.setChildren(new ArrayList<>());
                     }
-                    param.getChildren().addAll(scanPojoFieldsWithGenerics(realClass, null, visited, localGenericMap, project));
+                    param.getChildren().addAll(scanPojoFieldsWithGenerics(realClass, null, visited, localGenericMap, project, param));
                 }
             }
         } else if (realType != null) {
@@ -305,7 +333,7 @@ public class PojoFieldScanner {
                 if (param.getChildren() == null) {
                     param.setChildren(new ArrayList<>());
                 }
-                param.getChildren().addAll(scanPojoFieldsWithGenerics(globalClass, null, visited, localGenericMap, project));
+                param.getChildren().addAll(scanPojoFieldsWithGenerics(globalClass, null, visited, localGenericMap, project, param));
             }
         }
     }
@@ -313,9 +341,7 @@ public class PojoFieldScanner {
     /**
      * 判断是否为集合类型。
      */
-    private static boolean isCollectionType(String rawClassName) {
-        return LIST_CLASS.equals(rawClassName) || ARRAYLIST_CLASS.equals(rawClassName);
-    }
+
 
     /**
      * 处理集合类型字段递归。
@@ -323,7 +349,7 @@ public class PojoFieldScanner {
     private static void handleCollectionType(ApiParam param, PsiType[] typeArgs, Map<String, PsiType> localGenericMap, Set<String> visited, Project project) {
         if (typeArgs.length == 1) {
             PsiType listType = typeArgs[0];
-            ParamDataType elementDataType = guessDataType(listType);
+            ParamDataType elementDataType = DataTypeUtils.guessDataType(listType);
             if (elementDataType != ParamDataType.OBJECT) {
                 return;
             }
@@ -334,9 +360,23 @@ public class PojoFieldScanner {
                     genericClass = ((PsiClassType) realType).resolve();
                 }
             }
-            if (genericClass == null && listType instanceof PsiClassType) {
-                genericClass = ((PsiClassType) listType).resolve();
+
+            // 如果localGenericMap中没有，则尝试直接解析
+            if (genericClass == null) {
+                if (listType instanceof PsiWildcardType wildcardType) {
+                    // 处理通配符类型：? extends T 或 ? super T
+                    PsiType boundType = wildcardType.getExtendsBound();
+                    if (boundType == null) {
+                        boundType = wildcardType.getSuperBound();
+                    }
+                    if (boundType instanceof PsiClassType) {
+                        genericClass = ((PsiClassType) boundType).resolve();
+                    }
+                } else if (listType instanceof PsiClassType) {
+                    genericClass = ((PsiClassType) listType).resolve();
+                }
             }
+
             if (genericClass != null) {
                 if (param.getChildren() == null) {
                     param.setChildren(new ArrayList<>());
@@ -345,7 +385,7 @@ public class PojoFieldScanner {
                     param.setRawType(param.getRawType().replace(listType.getPresentableText(), genericClass.getName()));
                 }
                 param.setDescription(getClassDescription(genericClass));
-                param.getChildren().addAll(scanPojoFieldsWithGenerics(genericClass, null, visited, localGenericMap, project));
+                param.getChildren().addAll(scanPojoFieldsWithGenerics(genericClass, null, visited, localGenericMap, project, param));
             }
 
         }
@@ -358,38 +398,65 @@ public class PojoFieldScanner {
         PsiTypeParameter[] rawTypeParams = rawClass.getTypeParameters();
         // 如果是接口，自动查找同包下实现类
         if (rawClass.isInterface()) {
-            PsiFile containingFile = rawClass.getContainingFile();
-            if (containingFile != null && containingFile.getParent() != null) {
-                PsiDirectory directory = containingFile.getParent();
-                for (PsiFile file : directory.getFiles()) {
-                    if (file instanceof PsiJavaFile) {
-                        PsiClass[] classes = ((PsiJavaFile) file).getClasses();
-                        for (PsiClass implClass : classes) {
-                            if (implClass.isInheritor(rawClass, true)) {
-                                PsiTypeParameter[] implTypeParams = implClass.getTypeParameters();
-                                Map<String, PsiType> implTypeArgMap = new HashMap<>(DEFAULT_MAP_SIZE);
-                                for (int j = 0; j < implTypeParams.length && j < typeArgs.length; j++) {
-                                    implTypeArgMap.put(implTypeParams[j].getName(), typeArgs[j]);
-                                }
-                                if (param.getChildren() == null) {
-                                    param.setChildren(new ArrayList<>());
-                                }
-                                param.getChildren().addAll(scanPojoFieldsWithGenerics(implClass, null, visited, implTypeArgMap, project));
-                                break;
-                            }
+            List<ApiParam> apiParams = IMPLEMENTATION_CACHE.get(rawClass.getQualifiedName());
+            if (apiParams != null) {
+                if (param.getChildren() == null) {
+                    param.setChildren(new ArrayList<>());
+                }
+                param.getChildren().addAll(apiParams);
+                return;
+            }
+            PsiClass implClass = findBestImplementation(rawClass, project);
+            if (implClass != null) {
+                PsiTypeParameter[] implTypeParams = implClass.getTypeParameters();
+                Map<String, PsiType> implTypeArgMap = new HashMap<>(DEFAULT_MAP_SIZE);
+                for (int j = 0; j < implTypeParams.length && j < typeArgs.length; j++) {
+                    PsiType typeArg = typeArgs[j];
+                    if (typeArg instanceof PsiWildcardType wildcardType) {
+                        PsiType boundType = wildcardType.getExtendsBound();
+                        if (boundType == null) {
+                            boundType = wildcardType.getSuperBound();
                         }
+                        if (boundType != null) {
+                            implTypeArgMap.put(implTypeParams[j].getName(), boundType);
+                        } else {
+                            implTypeArgMap.put(implTypeParams[j].getName(), typeArg);
+                        }
+                    } else {
+                        implTypeArgMap.put(implTypeParams[j].getName(), typeArg);
                     }
                 }
+                if (param.getChildren() == null) {
+                    param.setChildren(new ArrayList<>());
+                }
+                apiParams = scanPojoFieldsWithGenerics(implClass, null, visited, implTypeArgMap, project, param);
+                param.getChildren().addAll(apiParams);
+                // 缓存
+                IMPLEMENTATION_CACHE.put(rawClass.getQualifiedName(), apiParams);
             }
         } else if (rawTypeParams.length > 0) {
             Map<String, PsiType> typeArgMap = new HashMap<>(DEFAULT_MAP_SIZE);
             for (int i = 0; i < rawTypeParams.length && i < typeArgs.length; i++) {
-                typeArgMap.put(rawTypeParams[i].getName(), typeArgs[i]);
+                // 处理通配符类型：? extends T 或 ? super T
+                PsiType typeArg = typeArgs[i];
+                if (typeArg instanceof PsiWildcardType wildcardType) {
+                    PsiType boundType = wildcardType.getExtendsBound();
+                    if (boundType == null) {
+                        boundType = wildcardType.getSuperBound();
+                    }
+                    if (boundType != null) {
+                        typeArgMap.put(rawTypeParams[i].getName(), boundType);
+                    } else {
+                        typeArgMap.put(rawTypeParams[i].getName(), typeArg);
+                    }
+                } else {
+                    typeArgMap.put(rawTypeParams[i].getName(), typeArg);
+                }
             }
             if (param.getChildren() == null) {
                 param.setChildren(new ArrayList<>());
             }
-            param.getChildren().addAll(scanPojoFieldsWithGenerics(rawClass, null, visited, typeArgMap, project));
+            param.getChildren().addAll(scanPojoFieldsWithGenerics(rawClass, null, visited, typeArgMap, project, param));
         } else {
             if (param.getChildren() == null) {
                 param.setChildren(new ArrayList<>());
@@ -397,8 +464,114 @@ public class PojoFieldScanner {
             param.setDescription(getClassDescription(rawClass));
             Map<String, PsiType> implTypeArgMap = new HashMap<>(DEFAULT_MAP_SIZE);
             implTypeArgMap.put("T", realType);
-            param.getChildren().addAll(scanPojoFieldsWithGenerics(rawClass, null, visited, implTypeArgMap, project));
+            param.getChildren().addAll(scanPojoFieldsWithGenerics(rawClass, null, visited, implTypeArgMap, project, param));
         }
+    }
+
+    /**
+     * 选择接口的最佳实现类，搜索顺序：同包 → 同模块 → 全项目。仅返回一个最优候选。
+     */
+    private static PsiClass findBestImplementation(PsiClass interfaceClass, Project project) {
+        if (interfaceClass == null || !interfaceClass.isInterface()) {
+            return null;
+        }
+
+        String interfaceFqn = interfaceClass.getQualifiedName();
+        if (interfaceFqn == null) {
+            return null;
+        }
+
+        String pkgName = getPackageName(interfaceClass);
+        PsiPackage psiPackage = pkgName != null ? JavaPsiFacade.getInstance(project).findPackage(pkgName) : null;
+        Module module = ModuleUtilCore.findModuleForPsiElement(interfaceClass);
+
+        PsiClass impl = null;
+        // 1) 同包（含子包）
+        if (psiPackage != null) {
+            // 创建包级别的搜索范围
+            PsiFile[] packageFiles = psiPackage.getFiles(GlobalSearchScope.allScope(project));
+            if (packageFiles.length > 0) {
+                // 将 PsiFile[] 转换为 VirtualFile 集合
+                java.util.Collection<com.intellij.openapi.vfs.VirtualFile> virtualFiles = new java.util.ArrayList<>();
+                for (PsiFile psiFile : packageFiles) {
+                    if (psiFile.getVirtualFile() != null) {
+                        virtualFiles.add(psiFile.getVirtualFile());
+                    }
+                }
+                if (!virtualFiles.isEmpty()) {
+                    GlobalSearchScope packageScope = GlobalSearchScope.filesScope(project, virtualFiles);
+                    impl = pickImplementationInScope(interfaceClass, packageScope, pkgName);
+                }
+            }
+        }
+        // 2) 同模块
+        if (impl == null && module != null) {
+            impl = pickImplementationInScope(interfaceClass, GlobalSearchScope.moduleWithDependenciesScope(module), pkgName);
+        }
+        // 3) 全项目
+        if (impl == null) {
+            impl = pickImplementationInScope(interfaceClass, GlobalSearchScope.projectScope(project), pkgName);
+        }
+
+        return impl;
+    }
+
+    private static final Map<String, List<ApiParam>> IMPLEMENTATION_CACHE = new HashMap<>(DEFAULT_MAP_SIZE);
+
+
+    /**
+     * 在给定Scope内挑选一个最优实现类：非抽象、非接口、非枚举；同包优先；名称以Impl/Default结尾优先。
+     */
+    private static PsiClass pickImplementationInScope(PsiClass interfaceClass, GlobalSearchScope scope, String pkgName) {
+        Query<PsiClass> query = ClassInheritorsSearch.search(interfaceClass, scope, true);
+        PsiClass best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (PsiClass candidate : query.findAll()) {
+            if (candidate.isInterface() || candidate.hasModifierProperty(PsiModifier.ABSTRACT) || candidate.isEnum()) {
+                continue;
+            }
+            int score = 0;
+            String qn = candidate.getQualifiedName();
+            String name = candidate.getName();
+            if (qn != null && pkgName != null && qn.startsWith(pkgName + ".")) {
+                score += 2;
+            }
+            if (name != null && (name.endsWith("Impl") || name.endsWith("Default"))) {
+                score += 3;
+            }
+            // 非抽象可实例化加权
+            score += 1;
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+                // 最高优先级快速返回
+                if (score >= 6) {
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    private static String getPackageName(PsiClass clazz) {
+        if (clazz == null) {
+            return null;
+        }
+        PsiFile file = clazz.getContainingFile();
+        if (file instanceof PsiJavaFile javaFile) {
+            String pn = javaFile.getPackageName();
+            if (pn != null && !pn.isEmpty()) {
+                return pn;
+            }
+        }
+        String fqn = clazz.getQualifiedName();
+        if (fqn != null) {
+            int idx = fqn.lastIndexOf('.');
+            if (idx > 0) {
+                return fqn.substring(0, idx);
+            }
+        }
+        return null;
     }
 
     /**
@@ -454,53 +627,37 @@ public class PojoFieldScanner {
         return cleanDoc.toString().trim();
     }
 
-    /**
-     * 类型推断工具方法。
-     *
-     * @param type PsiType
-     * @return ParamDataType
-     */
-    private static ParamDataType guessDataType(PsiType type) {
-        String presentableText = type.getPresentableText();
-        String canonicalText = type.getCanonicalText();
-        // 基础类型判断
-        if (INT_TYPE.equals(presentableText) || INTEGER_TYPE.equals(presentableText) || LONG_TYPE.equals(presentableText) || LONG_CLASS_TYPE.equals(presentableText)
-                || SHORT_TYPE.equals(presentableText) || SHORT_CLASS_TYPE.equals(presentableText)) {
-            return ParamDataType.INTEGER;
-        }
-        if (BOOLEAN_TYPE.equals(presentableText) || BOOLEAN_CLASS_TYPE.equals(presentableText)) {
-            return ParamDataType.BOOLEAN;
-        }
-        if (DOUBLE_TYPE.equals(presentableText) || DOUBLE_CLASS_TYPE.equals(presentableText) || FLOAT_TYPE.equals(presentableText) || FLOAT_CLASS_TYPE.equals(presentableText)
-                || BIGDECIMAL_TYPE.equals(presentableText) || BIGDECIMAL_FULL_TYPE.equals(canonicalText)) {
-            return ParamDataType.NUMBER;
-        }
-        if (STRING_TYPE.equals(presentableText) || JAVA_STRING_TYPE.equals(canonicalText)) {
-            return ParamDataType.STRING;
-        }
-        // 集合类型
-        if (type instanceof PsiClassType classType) {
-            PsiClass psiClass = classType.resolve();
-            if (psiClass != null) {
-                String qualifiedName = psiClass.getQualifiedName();
-                if (LIST_TYPE.equals(qualifiedName) || ARRAYLIST_TYPE.equals(qualifiedName)
-                        || COLLECTION_TYPE.equals(qualifiedName)) {
-                    return ParamDataType.ARRAY;
-                }
-                if (FILE_TYPE.equals(qualifiedName) || MULTIPART_FILE_TYPE.equals(qualifiedName)) {
-                    return ParamDataType.FILE;
-                }
-                // 只要不是JDK内置类型，默认按对象处理
-                if (qualifiedName != null && !qualifiedName.startsWith(JAVA_PACKAGE_PREFIX)) {
-                    return ParamDataType.OBJECT;
-                }
 
-                if (psiClass instanceof PsiTypeParameter) {
-                    // 是泛型类型参数，如 T、E、K、V 等
-                    return ParamDataType.OBJECT;
+    /**
+     * 获取枚举类的可选值（最多展示8个）
+     */
+    private static String getEnumValues(PsiClass enumClass) {
+        if (enumClass == null || !enumClass.isEnum()) {
+            return "";
+        }
+        StringBuilder values = new StringBuilder();
+        int count = 0;
+        for (PsiField field : enumClass.getAllFields()) {
+            if (field instanceof PsiEnumConstant) {
+                if (count > 0) {
+                    values.append(", ");
+                }
+                values.append(field.getName());
+                count++;
+                if (count >= 8) {
+                    values.append("...");
+                    break;
                 }
             }
         }
-        return ParamDataType.STRING;
+        return values.toString();
     }
-} 
+
+    /**
+     * 清理接口实现缓存
+     */
+    public static void clearImplementationCache() {
+        IMPLEMENTATION_CACHE.clear();
+        LogUtil.debug("[PojoFieldScanner] 接口实现缓存已清理");
+    }
+}

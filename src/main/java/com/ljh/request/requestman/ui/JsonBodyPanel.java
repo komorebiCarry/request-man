@@ -1,10 +1,12 @@
 package com.ljh.request.requestman.ui;
 
 import cn.hutool.json.JSONUtil;
-import com.ljh.request.requestman.enums.ContentType;
+
 import com.ljh.request.requestman.enums.ParamDataType;
 import com.ljh.request.requestman.model.ApiParam;
+import com.ljh.request.requestman.util.ApiInfoExtractor;
 import com.ljh.request.requestman.util.JsonExampleGenerator;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import java.awt.*;
@@ -24,121 +26,70 @@ public class JsonBodyPanel extends JPanel {
      */
     private JTextArea textAreaRef;
 
-    public JsonBodyPanel(List<ApiParam> bodyParamList) {
+    public JsonBodyPanel(List<ApiParam> bodyParamList, boolean isCustom, JPanel rightPanel) {
         super(new BorderLayout());
-        // 顶部Tab和右上角ContentType选择+功能按钮
-        JPanel topPanel = new JPanel(new BorderLayout());
+        
+        // 创建主面板
+        JPanel mainPanel = new JPanel(new BorderLayout());
+
+        // Tab 面板
         JTabbedPane tabPane = new JTabbedPane();
+        
         // 参数值Tab：原有json编辑器
         JPanel valuePanel = new JPanel(new BorderLayout());
-        JTextArea textArea = null;
-        JScrollPane scrollPane = null;
-        if (bodyParamList != null && !bodyParamList.isEmpty()) {
-            textArea = new JTextArea();
-            textArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
-            scrollPane = new JScrollPane(textArea);
-            valuePanel.add(scrollPane, BorderLayout.CENTER);
-            textAreaRef = textArea;
-        } else {
-            valuePanel.add(new JLabel("该请求没有Body", JLabel.CENTER), BorderLayout.CENTER);
-            textAreaRef = null;
+        JTextArea textArea = new JTextArea();
+        textArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        valuePanel.add(scrollPane, BorderLayout.CENTER);
+        textAreaRef = textArea;
+
+        tabPane.addTab(RequestManBundle.message("json.tab.value"), valuePanel);
+        if (!isCustom) {
+            // 数据结构Tab：结构树表格
+            JsonBodyStructurePanel structurePanel = new JsonBodyStructurePanel(bodyParamList);
+            tabPane.addTab(RequestManBundle.message("json.tab.structure"), structurePanel);
         }
-        tabPane.addTab("参数值", valuePanel);
-        // 数据结构Tab：结构树表格
-        JsonBodyStructurePanel structurePanel = new JsonBodyStructurePanel(bodyParamList);
-        tabPane.addTab("数据结构", structurePanel);
-        topPanel.add(tabPane, BorderLayout.WEST);
-        JComboBox<ContentType> contentTypeBox = new JComboBox<>(ContentType.values());
-        contentTypeBox.setSelectedItem(ContentType.APPLICATION_JSON);
-        // 右上角功能按钮
-        JButton formatBtn = new JButton("格式化");
-        JButton autoGenBtn = new JButton("自动生成");
-        // 右上角功能按钮和ContentType选择器
-        JPanel rightPanel = new JPanel();
-        rightPanel.setLayout(new BoxLayout(rightPanel, BoxLayout.X_AXIS));
-        rightPanel.add(formatBtn);
-        rightPanel.add(Box.createHorizontalStrut(8));
-        rightPanel.add(autoGenBtn);
-        rightPanel.add(Box.createHorizontalStrut(8));
-        // ContentType下拉框只显示label，鼠标悬停显示完整value
-        contentTypeBox.setRenderer(new DefaultListCellRenderer() {
-            @Override
-            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
-                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof ContentType) {
-                    ContentType ct = (ContentType) value;
-                    label.setText(ct.getLabel());
-                    label.setToolTipText(ct.getValue());
-                }
-                return label;
+        
+        // 组装主面板
+        mainPanel.add(tabPane, BorderLayout.CENTER);
+        
+        add(mainPanel);
+
+        // 将功能按钮添加到父面板的右侧面板
+        if (rightPanel != null) {
+            JButton formatBtn = new JButton(RequestManBundle.message("json.format"));
+            JButton autoGenBtn = new JButton(RequestManBundle.message("json.autogen"));
+            rightPanel.add(formatBtn);
+            rightPanel.add(autoGenBtn);
+
+            // 仅在有body参数时，绑定格式化/自动生成按钮逻辑
+            if (bodyParamList != null && !bodyParamList.isEmpty() && textArea != null) {
+                final JTextArea finalTextArea = textArea;
+                finalTextArea.setText(ApiInfoExtractor.getApiInfoBodyJson(bodyParamList));
+                // 格式化功能
+                formatBtn.addActionListener((ActionEvent e) -> {
+                    String text = finalTextArea.getText();
+                    try {
+                        String pretty = ApiInfoExtractor.formatJson(text);
+                        finalTextArea.setText(pretty);
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(this, RequestManBundle.message("json.format.error"), RequestManBundle.message("common.error"), JOptionPane.ERROR_MESSAGE);
+                    }
+                });
+                // 自动生成功能
+                autoGenBtn.addActionListener((ActionEvent e) -> {
+                    String json2;
+                    if (bodyParamList.size() == 1 && bodyParamList.get(0).getChildren() != null && !bodyParamList.get(0).getChildren().isEmpty()) {
+                        json2 = JsonExampleGenerator.generateRandomJson(bodyParamList.get(0).getChildren());
+                    } else {
+                        json2 = JsonExampleGenerator.generateRandomJson(bodyParamList);
+                    }
+                    finalTextArea.setText(json2);
+                });
             }
-        });
-        contentTypeBox.setMaximumSize(new Dimension(140, 28)); // 限制最大宽度
-        rightPanel.add(contentTypeBox);
-        topPanel.add(rightPanel, BorderLayout.EAST);
-        add(topPanel, BorderLayout.NORTH);
-        // 内容区：Tab切换显示
-        add(tabPane, BorderLayout.CENTER);
-        // 仅在有body参数时，绑定格式化/自动生成按钮逻辑
-        if (bodyParamList != null && !bodyParamList.isEmpty() && textArea != null) {
-            final JTextArea finalTextArea = textArea;
-            StringBuilder json = new StringBuilder();
-            if (bodyParamList.size() == 1 && bodyParamList.get(0).getChildren() != null && !bodyParamList.get(0).getChildren().isEmpty()) {
-                ApiParam apiParam = bodyParamList.get(0);
-                boolean isArray = false;
-                int index = 0;
-                if (ParamDataType.ARRAY.equals(apiParam.getDataType())) {
-                    isArray = true;
-                    json.append("[");
-                    json.append("\n");
-                    index = 2;
-                }
-                json.append(JsonExampleGenerator.genJsonWithComment(bodyParamList.get(0).getChildren(), index));
-                if (isArray) {
-                    json.append("\n");
-                    json.append("]");
-                }
-            } else {
-                json.append(JsonExampleGenerator.genJsonWithComment(bodyParamList, 0));
-            }
-            finalTextArea.setText(json.toString());
-            // 格式化功能
-            formatBtn.addActionListener((ActionEvent e) -> {
-                String text = finalTextArea.getText();
-                try {
-                    String pretty = formatJson(text);
-                    finalTextArea.setText(pretty);
-                } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(this, "JSON格式错误，无法格式化！", "错误", JOptionPane.ERROR_MESSAGE);
-                }
-            });
-            // 自动生成功能
-            autoGenBtn.addActionListener((ActionEvent e) -> {
-                String json2;
-                if (bodyParamList.size() == 1 && bodyParamList.get(0).getChildren() != null && !bodyParamList.get(0).getChildren().isEmpty()) {
-                    json2 = JsonExampleGenerator.generateRandomJson(bodyParamList.get(0).getChildren());
-                } else {
-                    json2 = JsonExampleGenerator.generateRandomJson(bodyParamList);
-                }
-                finalTextArea.setText(json2);
-            });
         }
     }
 
-    /**
-     * 使用Hutool标准格式化JSON字符串，格式化后去除冒号和逗号后的所有空格，生成极致紧凑的json
-     */
-    private String formatJson(String json) {
-        try {
-            // 去除所有换行和多余空白
-            String compact = json.replaceAll("\\s*\\n\\s*", "");
-            // 去除冒号和逗号后的所有空格
-            compact = compact.replaceAll(":\\s+", ":").replaceAll(",\\s+", ",");
-            return JSONUtil.formatJsonStr(compact);
-        } catch (Exception e) {
-            return json;
-        }
-    }
 
     /**
      * 根据参数列表生成简单JSON示例
@@ -205,5 +156,9 @@ public class JsonBodyPanel extends JPanel {
         if (textAreaRef != null) {
             textAreaRef.setText(text != null ? text : "");
         }
+    }
+
+    public JTextArea getTextAreaRef() {
+        return textAreaRef;
     }
 } 

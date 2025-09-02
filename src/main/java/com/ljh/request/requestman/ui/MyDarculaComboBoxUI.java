@@ -8,6 +8,7 @@ package com.ljh.request.requestman.ui;
 
 import com.intellij.ide.ui.laf.darcula.ui.DarculaComboBoxUI;
 import com.ljh.request.requestman.model.Environment;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 import javax.swing.*;
 import javax.swing.border.EmptyBorder;
@@ -86,7 +87,7 @@ public class MyDarculaComboBoxUI extends DarculaComboBoxUI {
                             }
 
                             // 创建管理环境按钮
-                            manageButton = new JButton("⚙ 管理环境");
+                            manageButton = new JButton("⚙ " + RequestManBundle.message("env.combobox.manage"));
                             manageButton.setPreferredSize(new Dimension(150, 30));
 
                             // 设置按钮样式 - 移除边框和背景

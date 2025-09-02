@@ -1,8 +1,14 @@
 package com.ljh.request.requestman.ui;
 
+import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.model.ApiParam;
+import com.ljh.request.requestman.ui.ParamsTablePanel;
+import org.apache.commons.lang3.StringUtils;
 
 import javax.swing.*;
+
+import com.ljh.request.requestman.util.RequestManBundle;
+
 import java.awt.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -39,32 +45,66 @@ public class BodyPanel extends JPanel {
      */
     private JComboBox<String> typeComboBox;
     /**
+     * json类型面板
+     */
+    private JsonBodyPanel jsonPanel;
+    /**
      * form-data类型面板
      */
-    private FormDataBodyPanel formDataPanel;
+    private ParamsTablePanel formDataPanel;
     /**
      * x-www-form-urlencoded类型面板
      */
-    private XWwwFormUrlencodedBodyPanel urlencodedPanel;
+    private ParamsTablePanel urlencodedPanel;
+    /**
+     * XML类型面板
+     */
+    private XmlBodyPanel xmlPanel;
+
+    /**
+     * XML类型面板
+     */
+    private BinaryBodyPanel binaryPanel;
+
+    /**
+     * 右侧功能按钮面板
+     */
+    private JPanel rightPanel;
+
+    public BodyPanel(ApiInfo apiInfo) {
+        this(apiInfo, false);
+    }
 
     /**
      * 构造方法，初始化Body类型切换和内容区。
      *
-     * @param bodyParamList 请求体参数列表
+     * @param apiInfo 请求体
      */
-    public BodyPanel(List<ApiParam> bodyParamList) {
+    public BodyPanel(ApiInfo apiInfo, boolean isCustom) {
         super(new BorderLayout());
-        // 顶部类型切换下拉框
+        // 顶部类型切换下拉框和功能按钮
         typeComboBox = new JComboBox<>(BODY_TYPES);
-        typeComboBox.setMaximumSize(new Dimension(150, 28));
-        JPanel typePanel = new JPanel();
-        typePanel.setLayout(new BoxLayout(typePanel, BoxLayout.X_AXIS));
-        typePanel.add(new JLabel("Body类型: "));
-        typePanel.add(typeComboBox);
-        typePanel.add(Box.createHorizontalGlue());
-        add(typePanel, BorderLayout.NORTH);
+        typeComboBox.setMaximumSize(new Dimension(140, 28));
+
+        JPanel topPanel = new JPanel(new BorderLayout());
+
+        // 左侧：Body 类型选择
+        JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        leftPanel.add(new JLabel(RequestManBundle.message("body.label") + ": "));
+        leftPanel.add(typeComboBox);
+
+        // 右侧：功能按钮（初始为空，根据类型动态添加）
+        JPanel rightPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 5, 5));
+
+        topPanel.add(leftPanel, BorderLayout.WEST);
+        topPanel.add(rightPanel, BorderLayout.EAST);
+
+        add(topPanel, BorderLayout.NORTH);
+
+        // 保存右侧面板引用，供后续添加功能按钮使用
+        this.rightPanel = rightPanel;
         // 构建内容区
-        buildContentPanel(bodyParamList);
+        buildContentPanel(apiInfo.getBodyParams(), isCustom);
         add(contentPanel, BorderLayout.CENTER);
         setPreferredSize(PARAM_PANEL_SIZE);
         // 切换内容区监听器
@@ -74,9 +114,21 @@ public class BodyPanel extends JPanel {
             }
             String selected = (String) typeComboBox.getSelectedItem();
             cardLayout.show(contentPanel, selected);
+
+            // 只有 JSON 类型显示功能按钮，其他类型隐藏
+            if (rightPanel != null) {
+                rightPanel.setVisible("json".equals(selected));
+            }
         });
         // 根据body参数类型自动推断默认Body类型
-        String defaultType = guessDefaultBodyType(bodyParamList);
+        String defaultType = StringUtils.isBlank(apiInfo.getBodyType()) ? guessDefaultBodyType(apiInfo.getBodyParams()) : apiInfo.getBodyType();
+        if ("json".equals(defaultType)) {
+            this.setJsonBody(apiInfo.getBody());
+        } else if ("xml".equals(defaultType)) {
+            this.setXmlBody(apiInfo.getBody());
+        } else if ("binary".equals(defaultType)) {
+            this.setFilePathFromBinaryText(apiInfo.getBody());
+        }
         typeComboBox.setSelectedItem(defaultType);
         cardLayout.show(contentPanel, defaultType);
         initializing = false;
@@ -87,33 +139,34 @@ public class BodyPanel extends JPanel {
      *
      * @param bodyParamList 请求体参数列表
      */
-    private void buildContentPanel(List<ApiParam> bodyParamList) {
+    private void buildContentPanel(List<ApiParam> bodyParamList, boolean isCustom) {
         // none类型
         JPanel nonePanel = new JPanel(new BorderLayout());
-        JLabel noneLabel = new JLabel("该请求没有Body", JLabel.CENTER);
+        JLabel noneLabel = new JLabel(RequestManBundle.message("body.none"), JLabel.CENTER);
         nonePanel.add(noneLabel, BorderLayout.CENTER);
         contentPanel.add(nonePanel, "none");
 
         // form-data类型
-        formDataPanel = new FormDataBodyPanel(bodyParamList);
+        formDataPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.BODY_FORM_DATA, bodyParamList);
         contentPanel.add(formDataPanel, "form-data");
 
         // x-www-form-urlencoded类型
-        urlencodedPanel = new XWwwFormUrlencodedBodyPanel(bodyParamList);
+        urlencodedPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.BODY_URLENCODED, bodyParamList);
         contentPanel.add(urlencodedPanel, "x-www-form-urlencoded");
 
         // json类型
-        JsonBodyPanel jsonPanel = new JsonBodyPanel(bodyParamList);
+        jsonPanel = new JsonBodyPanel(bodyParamList, isCustom, rightPanel);
         contentPanel.add(jsonPanel, "json");
 
         // xml类型
-        XmlBodyPanel xmlPanel = new XmlBodyPanel(bodyParamList);
+        xmlPanel = new XmlBodyPanel(bodyParamList);
         contentPanel.add(xmlPanel, "xml");
 
         // binary类型
-        BinaryBodyPanel binaryPanel = new BinaryBodyPanel(bodyParamList);
+        binaryPanel = new BinaryBodyPanel(bodyParamList);
         contentPanel.add(binaryPanel, "binary");
     }
+
 
     /**
      * 根据body参数类型自动推断默认Body类型。
@@ -122,7 +175,7 @@ public class BodyPanel extends JPanel {
      * @param bodyParamList 请求体参数列表
      * @return 默认Body类型
      */
-    private String guessDefaultBodyType(List<ApiParam> bodyParamList) {
+    public static String guessDefaultBodyType(List<ApiParam> bodyParamList) {
         if (bodyParamList == null || bodyParamList.isEmpty()) {
             return "none";
         }
@@ -245,7 +298,7 @@ public class BodyPanel extends JPanel {
         }
 
         // 9. 默认使用JSON（最通用的选择）
-        return "json";
+        return "none";
     }
 
     /**
@@ -254,7 +307,7 @@ public class BodyPanel extends JPanel {
      * @param contentType Content-Type字符串
      * @return 对应的Body类型
      */
-    private String mapContentTypeToBodyType(String contentType) {
+    private static String mapContentTypeToBodyType(String contentType) {
         if (contentType == null) {
             return "json";
         }
@@ -332,7 +385,7 @@ public class BodyPanel extends JPanel {
      * @param rawType      原始类型
      * @return 是否是基本类型
      */
-    private boolean isBasicType(String dataTypeName, String rawType) {
+    private static boolean isBasicType(String dataTypeName, String rawType) {
         return dataTypeName.equals("string") ||
                 dataTypeName.equals("integer") ||
                 dataTypeName.equals("number") ||
@@ -357,7 +410,7 @@ public class BodyPanel extends JPanel {
      * @param rawType      原始类型
      * @return 是否是复杂对象
      */
-    private boolean isComplexObject(String dataTypeName, String rawType) {
+    private static boolean isComplexObject(String dataTypeName, String rawType) {
         // 排除基本类型和数组
         if (isBasicType(dataTypeName, rawType) ||
                 dataTypeName.equals("array") ||
@@ -478,23 +531,147 @@ public class BodyPanel extends JPanel {
         if (comp instanceof BinaryBodyPanel binaryPanel) {
             if (binaryPanel.getSelectedFile() != null) {
                 return binaryPanel.getSelectedFile().getAbsolutePath();
-            } else {
-                return binaryPanel.getHexData();
             }
         }
         return "";
     }
 
+//    /**
+//     * 获取二进制数据
+//     *
+//     * @return 二进制数据字节数组
+//     */
+//    public byte[] getBinaryData() {
+//        Component comp = contentPanel.getComponent(5); // "binary" 类型在 buildContentPanel 顺序第6个
+//        if (comp instanceof BinaryBodyPanel binaryPanel) {
+//            return binaryPanel.getBinaryData();
+//        }
+//        return new byte[0];
+//    }
+
+    public JsonBodyPanel getJsonBodyPanel() {
+        for (Component comp : contentPanel.getComponents()) {
+            if (comp instanceof JsonBodyPanel) {
+                return (JsonBodyPanel) comp;
+            }
+        }
+        return null;
+    }
+
     /**
-     * 获取二进制数据
+     * 获取XML面板引用
+     *
+     * @return XmlBodyPanel实例
+     */
+    public XmlBodyPanel getXmlBodyPanel() {
+        return xmlPanel;
+    }
+
+    public BinaryBodyPanel getBinaryPanel() {
+        return binaryPanel;
+    }
+
+    public JComboBox<String> getTypeComboBox() {
+        return typeComboBox;
+    }
+
+    /**
+     * 设置当前请求体类型
+     */
+    public void setBodyType(String type) {
+        if (type == null) {
+            type = "none";
+        }
+        typeComboBox.setSelectedItem(type);
+        cardLayout.show(contentPanel, type);
+    }
+
+    /**
+     * 设置 json 内容并切换到 json 类型
+     */
+    public void setJsonBody(String json) {
+        setJsonBodyText(json);
+        setBodyType("json");
+    }
+
+    /**
+     * 设置 xml 内容并切换到 xml 类型
+     */
+    public void setXmlBody(String xml) {
+        setXmlBodyText(xml);
+        setBodyType("xml");
+    }
+
+//    /**
+//     * 设置 binary 内容并切换到 binary 类型
+//     */
+//    public void setBinaryBody(byte[] binaryData) {
+//        Component comp = contentPanel.getComponent(5);
+//        if (comp instanceof BinaryBodyPanel binaryPanel) {
+//            binaryPanel.setBinaryData(binaryData != null ? binaryData : new byte[0]);
+//        }
+//        setBodyType("binary");
+//    }
+
+    /**
+     * 设置 form-data 参数并切换显示
+     */
+    public void setFormDataParams(List<ApiParam> params) {
+        if (formDataPanel != null) {
+            contentPanel.remove(formDataPanel);
+        }
+        formDataPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.BODY_FORM_DATA, params != null ? params : new ArrayList<>());
+        contentPanel.add(formDataPanel, "form-data");
+        setBodyType("form-data");
+    }
+
+    /**
+     * 设置 x-www-form-urlencoded 参数并切换显示
+     */
+    public void setUrlencodedParams(List<ApiParam> params) {
+        if (urlencodedPanel != null) {
+            contentPanel.remove(urlencodedPanel);
+        }
+        urlencodedPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.BODY_URLENCODED, params != null ? params : new ArrayList<>());
+        contentPanel.add(urlencodedPanel, "x-www-form-urlencoded");
+        setBodyType("x-www-form-urlencoded");
+    }
+
+    /**
+     * 获取 form-data 面板引用
+     */
+    public ParamsTablePanel getFormDataPanel() {
+        return formDataPanel;
+    }
+
+    /**
+     * 获取 x-www-form-urlencoded 面板引用
+     */
+    public ParamsTablePanel getUrlencodedPanel() {
+        return urlencodedPanel;
+    }
+
+    /**
+     * 获取binary文件目录
      *
      * @return 二进制数据字节数组
      */
-    public byte[] getBinaryData() {
-        Component comp = contentPanel.getComponent(5); // "binary" 类型在 buildContentPanel 顺序第6个
-        if (comp instanceof BinaryBodyPanel binaryPanel) {
-            return binaryPanel.getBinaryData();
+    public String getFilePathFromBinaryText() {
+        if (binaryPanel != null) {
+            return binaryPanel.getFilePathFromBinaryText();
         }
-        return new byte[0];
+
+        return "";
     }
-} 
+
+    /**
+     * 设置binary文件目录
+     *
+     * @return 二进制数据字节数组
+     */
+    public void setFilePathFromBinaryText(String binaryText) {
+        if (binaryPanel != null) {
+            binaryPanel.setFilePathFromBinaryText(binaryText);
+        }
+    }
+}

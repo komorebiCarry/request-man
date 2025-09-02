@@ -1,8 +1,11 @@
 package com.ljh.request.requestman.ui;
 
+import com.ljh.request.requestman.model.ApiParam;
+import com.ljh.request.requestman.ui.ParamsTablePanel;
+
 import javax.swing.*;
-import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -10,174 +13,144 @@ import java.util.Map;
 
 /**
  * @author leijianhui
- * @Description 请求头参数面板，支持增删行、可编辑、持久化。
- * @date 2025/06/19 09:36
+ * @Description 请求头参数面板，使用统一的参数表格面板
+ * @date 2025/01/27 10:30
  */
 public class HeadersPanel extends JPanel {
-    private static final Dimension PARAM_PANEL_SIZE = new Dimension(600, 120);
-    private final DefaultTableModel tableModel;
-    private final JTable table;
-    private javax.swing.event.TableModelListener addRowListener;
+    private static final Dimension PANEL_SIZE = new Dimension(600, 120);
+    private final ParamsTablePanel paramsPanel;
 
     public HeadersPanel() {
         super(new BorderLayout());
-        String[] columnNames = {"参数名", "参数值", "类型", "说明", ""};
-        tableModel = new DefaultTableModel(columnNames, 0) {
-            @Override
-            public boolean isCellEditable(int row, int column) {
-                // 最后一行为"添加参数"行，只有前两列可编辑
-                if (row == getRowCount() - 1) {
-                    return column == 0 || column == 1;
-                }
-                // 其他行前三列可编辑
-                return column < 3;
-            }
-        };
-        table = new JTable(tableModel);
-        table.getTableHeader().setReorderingAllowed(false);
-        // 添加"添加参数"行
-        addEmptyRow();
-        // 监听"添加参数"行输入
-        addRowListener = e -> {
-            int lastRow = tableModel.getRowCount() - 1;
-            // 防止表格为空时越界访问，符合阿里巴巴规范
-            if (lastRow < 0) {
-                return;
-            }
-            String name = (String) tableModel.getValueAt(lastRow, 0);
-            String value = (String) tableModel.getValueAt(lastRow, 1);
-            if (name != null && !name.trim().isEmpty()) {
-                // 有输入时自动添加新行
-                addEmptyRow();
-            }
-        };
-        tableModel.addTableModelListener(addRowListener);
-        // 右键菜单支持删除行
-        JPopupMenu popupMenu = new JPopupMenu();
-        JMenuItem deleteItem = new JMenuItem("删除");
-        deleteItem.addActionListener(e -> {
-            int row = table.getSelectedRow();
-            if (row >= 0 && row < tableModel.getRowCount() - 1) {
-                tableModel.removeRow(row);
-            }
-        });
-        popupMenu.add(deleteItem);
-        table.setComponentPopupMenu(popupMenu);
-        // 右键点击时自动选中当前行，保证删除操作生效
-        table.addMouseListener(new java.awt.event.MouseAdapter() {
-            @Override
-            public void mousePressed(java.awt.event.MouseEvent e) {
-                if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
-                    int row = table.rowAtPoint(e.getPoint());
-                    if (row >= 0 && row < table.getRowCount()) {
-                        table.setRowSelectionInterval(row, row);
-                    }
-                }
-            }
-
-            @Override
-            public void mouseReleased(java.awt.event.MouseEvent e) {
-                if (e.isPopupTrigger() || SwingUtilities.isRightMouseButton(e)) {
-                    int row = table.rowAtPoint(e.getPoint());
-                    if (row >= 0 && row < table.getRowCount()) {
-                        table.setRowSelectionInterval(row, row);
-                    }
-                }
-            }
-        });
-        JScrollPane scrollPane = new JScrollPane(table);
-        add(scrollPane, BorderLayout.CENTER);
-        setPreferredSize(PARAM_PANEL_SIZE);
+        setPreferredSize(PANEL_SIZE);
+        
+        // 使用统一的参数表格面板，只支持字符串类型
+        paramsPanel = new ParamsTablePanel(ParamsTablePanel.ParamUsage.HEADERS, new ArrayList<>());
+        add(paramsPanel, BorderLayout.CENTER);
     }
 
     /**
-     * 添加空行（用于"添加参数"）
+     * 获取所有参数
      */
-    private void addEmptyRow() {
-        // 只添加一行空行
-        int lastRow = tableModel.getRowCount() - 1;
-        if (lastRow < 0 || tableModel.getValueAt(lastRow, 0) != null && !((String) tableModel.getValueAt(lastRow, 0)).isEmpty()) {
-            tableModel.addRow(new Object[]{"", "", "string", ""});
+    public List<ApiParam> getParams() {
+        return paramsPanel.getParams();
+    }
+
+    /**
+     * 设置参数数据（用于回显）
+     */
+    public void setParams(List<ApiParam> paramList) {
+        paramsPanel.setParams(paramList);
+    }
+
+    /**
+     * 获取表格引用
+     */
+    public JTable getTable() {
+        return paramsPanel.getTable();
+    }
+
+    /**
+     * 设置请求头数据（兼容性方法）
+     */
+    public void setHeadersData(List<HeaderItem> headerItems) {
+        if (headerItems != null) {
+            List<ApiParam> apiParams = new ArrayList<>();
+            for (HeaderItem item : headerItems) {
+                ApiParam param = new ApiParam();
+                param.setName(item.getName());
+                param.setValue(item.getValue());
+                param.setType(item.getType());
+                param.setDescription(item.getDescription());
+                apiParams.add(param);
+            }
+            setParams(apiParams);
         }
     }
 
     /**
-     * 停止表格编辑状态，确保编辑内容写入TableModel
-     */
-    private void stopTableEditing() {
-        if (table != null && table.isEditing()) {
-            table.getCellEditor().stopCellEditing();
-        }
-    }
-
-    /**
-     * 获取所有有效Header参数（不含最后一行空行）
+     * 获取请求头数据（兼容性方法）
      */
     public List<HeaderItem> getHeadersData() {
-        // 获取数据前，主动结束表格编辑，确保编辑内容写入TableModel，避免数据丢失
-        stopTableEditing();
-
-        List<HeaderItem> list = new ArrayList<>();
-        int rowCount = tableModel.getRowCount();
-        for (int i = 0; i < rowCount - 1; i++) {
-            String name = (String) tableModel.getValueAt(i, 0);
-            String value = (String) tableModel.getValueAt(i, 1);
-            String type = (String) tableModel.getValueAt(i, 2);
-            String desc = (String) tableModel.getValueAt(i, 3);
-            if (name != null && !name.trim().isEmpty()) {
-                list.add(new HeaderItem(name, value, type, desc));
+        List<ApiParam> apiParams = getParams();
+        List<HeaderItem> headerItems = new ArrayList<>();
+        for (ApiParam param : apiParams) {
+            if (param.getName() != null && !param.getName().trim().isEmpty()) {
+                HeaderItem item = new HeaderItem();
+                item.setName(param.getName());
+                item.setValue(param.getValue());
+                item.setType(param.getType());
+                item.setDescription(param.getDescription());
+                headerItems.add(item);
             }
         }
-        return list;
+        return headerItems;
     }
 
     /**
-     * 设置Header参数（用于持久化恢复）
-     */
-    public void setHeadersData(List<HeaderItem> headers) {
-        tableModel.removeTableModelListener(addRowListener); // 先移除监听
-        tableModel.setRowCount(0);
-        if (headers != null) {
-            for (HeaderItem h : headers) {
-                tableModel.addRow(new Object[]{h.name, h.value, h.type, h.desc});
-            }
-        }
-        addEmptyRow();
-        tableModel.addTableModelListener(addRowListener); // 再加回监听
-    }
-
-    /**
-     * 获取所有header参数，返回Map
+     * 获取请求头Map（兼容性方法）
      */
     public Map<String, String> getHeadersMap() {
-        // 获取数据前，主动结束表格编辑，确保编辑内容写入TableModel，避免数据丢失
-        stopTableEditing();
-
-        Map<String, String> map = new HashMap<>();
-        for (int i = 0; i < tableModel.getRowCount(); i++) {
-            String name = (String) tableModel.getValueAt(i, 0);
-            String value = (String) tableModel.getValueAt(i, 1);
-            if (name != null && !name.trim().isEmpty()) {
-                map.put(name, value != null ? value : "");
+        List<ApiParam> apiParams = getParams();
+        Map<String, String> headersMap = new HashMap<>();
+        for (ApiParam param : apiParams) {
+            if (param.getName() != null && !param.getName().trim().isEmpty()) {
+                headersMap.put(param.getName(), param.getValue());
             }
         }
-        return map;
+        return headersMap;
     }
 
     /**
-     * Header参数数据结构
+     * 请求头项
      */
-    public static class HeaderItem {
-        public String name;
-        public String value;
-        public String type;
-        public String desc;
+    public static class HeaderItem  implements Serializable {
 
-        public HeaderItem(String name, String value, String type, String desc) {
+        private static final long serialVersionUID = 2473960574224179533L;
+        private String name;
+        private String value;
+        private String type;
+        private String description;
+
+        public HeaderItem() {}
+
+        public HeaderItem(String name, String value, String type, String description) {
             this.name = name;
             this.value = value;
             this.type = type;
-            this.desc = desc;
+            this.description = description;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public String getValue() {
+            return value;
+        }
+
+        public void setValue(String value) {
+            this.value = value;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public void setType(String type) {
+            this.type = type;
+        }
+
+        public String getDescription() {
+            return description;
+        }
+
+        public void setDescription(String description) {
+            this.description = description;
         }
     }
-} 
+}

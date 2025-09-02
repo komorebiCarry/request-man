@@ -2,6 +2,7 @@ package com.ljh.request.requestman.model;
 
 import com.ljh.request.requestman.enums.ParamDataType;
 
+import java.io.Serializable;
 import java.util.List;
 
 /**
@@ -9,7 +10,9 @@ import java.util.List;
  * @Description 接口参数数据结构，包含参数名、值、类型、描述等。
  * @date 2025/06/18 15:06
  */
-public class ApiParam {
+public class ApiParam implements Serializable {
+
+    private static final long serialVersionUID = 995493750715801708L;
     /**
      * 参数名
      */
@@ -46,6 +49,11 @@ public class ApiParam {
      * Content-Type信息，用于@RequestBody参数的consumes属性
      */
     private String contentType;
+
+    /**
+     * 是否为递归字段
+     */
+    private boolean recursive;
 
     /**
      * 无参构造方法
@@ -239,5 +247,23 @@ public class ApiParam {
      */
     public void setContentType(String contentType) {
         this.contentType = contentType;
+    }
+
+    /**
+     * 获取是否为递归字段
+     *
+     * @return 是否为递归字段
+     */
+    public boolean isRecursive() {
+        return recursive;
+    }
+
+    /**
+     * 设置是否为递归字段
+     *
+     * @param recursive 是否为递归字段
+     */
+    public void setRecursive(boolean recursive) {
+        this.recursive = recursive;
     }
 }

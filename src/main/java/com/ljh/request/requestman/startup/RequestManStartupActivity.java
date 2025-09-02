@@ -12,7 +12,9 @@ import com.intellij.openapi.startup.ProjectActivity;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.ljh.request.requestman.search.ApiSearchPopup;
+import com.ljh.request.requestman.ui.RequestManPanel;
 import com.ljh.request.requestman.util.LogUtil;
+import com.ljh.request.requestman.util.PojoFieldScanner;
 import com.ljh.request.requestman.util.ProjectHistoryCleaner;
 import kotlin.Unit;
 import kotlin.coroutines.Continuation;
@@ -55,6 +57,15 @@ public class RequestManStartupActivity implements ProjectActivity {
                             LogUtil.info("[RequestMan] 项目 " + project.getName() + " 正在关闭，清理缓存");
                             ApiSearchPopup.clearProjectCache(project);
                             ProjectHistoryCleaner.clearProjectHistory(project);
+                            // 项目关闭时检查是否有未保存的更改
+                            RequestManPanel requestManPanel = RequestManPanel.findRequestManPanel(project);
+                            if (requestManPanel != null) {
+                                requestManPanel.checkUnsavedChanges();
+                                // 清理基线缓存，防止内存泄漏
+                                requestManPanel.clearBaselines();
+                            }
+                            // 清理接口实现缓存，防止内存泄漏
+                            PojoFieldScanner.clearImplementationCache();
                         }
                     }
                 }

@@ -4,6 +4,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.wm.IdeFrame;
 import com.intellij.openapi.wm.WindowManager;
+import com.ljh.request.requestman.util.RequestManBundle;
 
 /**
  * 项目工具类，提供统一的项目获取和管理功能
@@ -96,7 +97,7 @@ public class ProjectUtils {
     public static Project getCurrentProjectOrThrow() {
         Project project = getCurrentProject();
         if (project == null) {
-            throw new IllegalStateException("无法获取当前项目，请确保至少有一个项目已打开");
+            throw new IllegalStateException(RequestManBundle.message("project.utils.no.project"));
         }
         return project;
     }

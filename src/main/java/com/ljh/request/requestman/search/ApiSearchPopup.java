@@ -21,6 +21,7 @@ import com.intellij.util.ui.AsyncProcessIcon;
 import com.ljh.request.requestman.model.ApiInfo;
 import com.ljh.request.requestman.util.LogUtil;
 import com.ljh.request.requestman.util.PerformanceMonitor;
+import com.ljh.request.requestman.util.RequestManBundle;
 import org.apache.commons.lang3.StringUtils;
 
 import javax.swing.*;
@@ -37,7 +38,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -65,15 +65,15 @@ public class ApiSearchPopup {
     private String lastKeyword = "";
     private Future<?> scanTask;
     private final JComboBox<String> modeBox = new JComboBox<>(new String[]{"ALL", "URL", "Method", "ApiName"});
-    private final JCheckBox includeLibsBox = new JCheckBox("包含第三方包", false);
+    private final JCheckBox includeLibsBox = new JCheckBox(RequestManBundle.message("search.include.libs"), false);
     private GlobalSearchScope currentScope;
     private JPanel inputPanel;
     private JPanel resultPanel;
     /**
      * 防抖定时器
      */
-    private final ScheduledExecutorService debounceExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "ApiSearchPopup-Debounce");
+    private final ScheduledExecutorService debounceExecutor = new java.util.concurrent.ScheduledThreadPoolExecutor(1, r -> {
+        Thread t = new Thread(r, "requestman-search-debounce");
         t.setDaemon(true);
         return t;
     });
@@ -95,95 +95,11 @@ public class ApiSearchPopup {
      * 方法图标缓存
      */
     private final Map<String, Icon> methodIconCache = new HashMap<>();
-    /**
-     * 字体缓存 - 使用IDEA的编辑器字体并增大字号
-     */
-    private static Font LIST_FONT = getIdeFont();
-
-    /**
-     * 刷新字体缓存，使设置立即生效
-     */
-    public static void refreshFont() {
-        LIST_FONT = getIdeFont();
-        // 通知已打开的弹窗更新字体
-        notifyFontChanged();
-    }
-
-    /**
-     * 通知字体变化的静态方法
-     */
-    private static void notifyFontChanged() {
-        // 这里可以添加通知机制，但目前简单处理
-        // 用户需要重新打开搜索弹窗才能看到字体变化
-    }
-
-    /**
-     * 获取默认字体大小（IDEA字体大小加6）
-     */
-    private static int getDefaultFontSize() {
-        // 优先使用IDEA的编辑器字体大小
-        Font editorFont = UIManager.getFont("EditorPane.font");
-        if (editorFont != null) {
-            return editorFont.getSize() + 6;
-        }
-
-        // 如果没有编辑器字体，使用标签字体大小
-        Font labelFont = UIManager.getFont("Label.font");
-        if (labelFont != null) {
-            return labelFont.getSize() + 6;
-        }
-
-        // 最后使用默认值
-        return 18;
-    }
-
-    /**
-     * 获取IDEA的编辑器字体并使用配置的字号
-     */
-    private static Font getIdeFont() {
-        // 从配置中获取字体大小，默认值为IDEA字体大小加8
-        int fontSize = getDefaultFontSize();
-        try {
-            String fontSizeStr = PropertiesComponent.getInstance().getValue("requestman.searchFontSize", String.valueOf(fontSize));
-            fontSize = Integer.parseInt(fontSizeStr);
-        } catch (Exception e) {
-            // 使用默认值
-        }
-
-        // 优先使用IDEA的编辑器字体
-        Font editorFont = UIManager.getFont("EditorPane.font");
-        if (editorFont != null) {
-            return editorFont.deriveFont((float) fontSize);
-        }
-
-        // 如果没有编辑器字体，使用标签字体
-        Font labelFont = UIManager.getFont("Label.font");
-        if (labelFont != null) {
-            return labelFont.deriveFont((float) fontSize);
-        }
-
-        // 最后使用默认字体
-        return new Font("Dialog", Font.PLAIN, fontSize);
-    }
 
     /**
      * 项目级别的缓存管理器，解决多工程缓存混淆问题
      */
     private static final ConcurrentHashMap<String, ProjectCache> projectCacheMap = new ConcurrentHashMap<>();
-
-    /**
-     * 项目缓存内部类
-     */
-    private static class ProjectCache {
-        private final List<ApiSearchEntry> projectApisCache = new ArrayList<>();
-        private final List<ApiSearchEntry> allApisCache = new ArrayList<>();
-        private volatile boolean projectCacheReady = false;
-        private volatile boolean allCacheReady = false;
-
-        public ProjectCache(String projectName) {
-            // 简单的缓存，不需要复杂的清理逻辑
-        }
-    }
 
     /**
      * 获取项目缓存
@@ -223,6 +139,11 @@ public class ApiSearchPopup {
         // 读取第三方包设置并设置勾选框初始状态
         Boolean includeLibsObj = PropertiesComponent.getInstance().getBoolean("requestman.includeLibs", false);
         includeLibsBox.setSelected(includeLibsObj != null && includeLibsObj);
+
+        // 开启移除取消任务策略，减少已取消任务在队列中的滞留
+        if (debounceExecutor instanceof java.util.concurrent.ScheduledThreadPoolExecutor) {
+            ((java.util.concurrent.ScheduledThreadPoolExecutor) debounceExecutor).setRemoveOnCancelPolicy(true);
+        }
 
     }
 
@@ -455,10 +376,14 @@ public class ApiSearchPopup {
                 }
                 if (!isInitSearchMode) {
                     ProjectCache projectCache = getProjectCache();
-                    projectCache.projectApisCache.clear();
-                    projectCache.allApisCache.clear();
-                    projectCache.projectCacheReady = false;
-                    projectCache.allCacheReady = false;
+                    projectCache.clearProjectApisCache();
+                    projectCache.clearAllApisCache();
+                    projectCache.setProjectCacheReady(false);
+                    projectCache.setAllCacheReady(false);
+                }
+                // 先尝试取消未执行的防抖任务
+                if (debounceFuture != null && !debounceFuture.isDone()) {
+                    debounceFuture.cancel(false);
                 }
                 if (debounceExecutor != null && !debounceExecutor.isShutdown()) {
                     try {
@@ -562,14 +487,14 @@ public class ApiSearchPopup {
         rightPanel.add(includeLibsBox);
         // 新增：刷新按钮
         JButton refreshBtn = new JButton(com.intellij.icons.AllIcons.Actions.Refresh);
-        refreshBtn.setToolTipText("刷新接口");
+        refreshBtn.setToolTipText(RequestManBundle.message("search.refresh.tooltip"));
         refreshBtn.setPreferredSize(new Dimension(28, 28));
         refreshBtn.setFocusPainted(false);
         refreshBtn.setBorderPainted(false);
         refreshBtn.setContentAreaFilled(false);
         // 先不加到rightPanel
         filterBtn = new JButton(com.intellij.icons.AllIcons.General.Filter);
-        filterBtn.setToolTipText("请求方法筛选");
+        filterBtn.setToolTipText(RequestManBundle.message("search.filter.tooltip"));
         filterBtn.setPreferredSize(new Dimension(32, 32));
         filterBtn.setFocusPainted(false);
         filterBtn.setBorderPainted(false);
@@ -754,7 +679,7 @@ public class ApiSearchPopup {
         // 恢复原始宽度
         searchField.setPreferredSize(new Dimension(RESULT_INPUT_POPUP_WIDTH, 48));
         // 设置SearchTextField内部文本编辑器的字体
-        searchField.getTextEditor().setFont(LIST_FONT);
+        searchField.getTextEditor().setFont(FontManager.getCurrentFont());
         searchRow.add(searchField);
         // 完全移除边距
         searchRow.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
@@ -776,12 +701,12 @@ public class ApiSearchPopup {
         resultList.setModel(listModel);
         resultList.setEmptyText("");
         // 设置列表字体
-        resultList.setFont(LIST_FONT);
+        resultList.setFont(FontManager.getCurrentFont());
         resultList.setCellRenderer(new DefaultListCellRenderer() {
             @Override
             public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
                 if (value instanceof MorePlaceholder) {
-                    return super.getListCellRendererComponent(list, "加载更多...", index, isSelected, cellHasFocus);
+                    return super.getListCellRendererComponent(list, RequestManBundle.message("search.load.more"), index, isSelected, cellHasFocus);
                 }
                 if (value == null || !(value instanceof ApiSearchEntry)) {
                     return super.getListCellRendererComponent(list, "", index, isSelected, cellHasFocus);
@@ -815,7 +740,7 @@ public class ApiSearchPopup {
                         methodName
                 );
                 JLabel label = (JLabel) super.getListCellRendererComponent(list, display, index, isSelected, cellHasFocus);
-                label.setFont(LIST_FONT);
+                label.setFont(FontManager.getCurrentFont());
                 label.setForeground(UIManager.getColor("Label.foreground"));
                 label.setIcon(null);
                 // 方法块图标
@@ -904,11 +829,11 @@ public class ApiSearchPopup {
         List<ApiSearchEntry> source;
         boolean ready;
         if (includeLibsBox.isSelected()) {
-            source = projectCache.allApisCache;
-            ready = projectCache.allCacheReady;
+            source = projectCache.getAllApisCache();
+            ready = projectCache.isAllCacheReady();
         } else {
-            source = projectCache.projectApisCache;
-            ready = projectCache.projectCacheReady;
+            source = projectCache.getProjectApisCache();
+            ready = projectCache.isProjectCacheReady();
         }
         // 控制输入栏loadingIcon和loadingLabel显示/隐藏
         if (!ready) {
@@ -921,7 +846,7 @@ public class ApiSearchPopup {
             // 不再插入LoadingPlaceholder到结果区
             return;
         }
-        LogUtil.debug("[ApiSearchPopup] [" + now() + "] 开始");
+        LogUtil.debug("[ApiSearchPopup] [" + now() + "] Starting");
 
         Set<String> selectedMethods = new HashSet<>();
         for (int i = 0; i < methods.length; i++) {
@@ -1174,79 +1099,12 @@ public class ApiSearchPopup {
                         }
                     }
                 } else {
-                    com.intellij.openapi.ui.Messages.showInfoMessage(project, "未找到对应方法，可能已被删除或重命名。", "跳转失败");
+                    com.intellij.openapi.ui.Messages.showInfoMessage(project, RequestManBundle.message("search.method.not.found"), RequestManBundle.message("search.jump.failed"));
                 }
             }).submit(AppExecutorUtil.getAppExecutorService());
         });
     }
 
-    /**
-     * "..."占位符，仅用于UI展示
-     */
-    private static class MorePlaceholder extends ApiSearchEntry {
-        public MorePlaceholder() {
-            super("", "", "", "", "", java.util.Collections.emptyList());
-        }
-
-        @Override
-        public String toString() {
-            return "...";
-        }
-    }
-
-    /**
-     * 搜索加载中占位项
-     */
-    private static class LoadingPlaceholder extends ApiSearchEntry {
-        public LoadingPlaceholder() {
-            super("", "", "", "", "", java.util.Collections.emptyList());
-        }
-
-        @Override
-        public String toString() {
-            return "Searching...";
-        }
-    }
-
-    // 方法块图标实现
-    class MethodIcon implements Icon {
-        private final String method;
-        private final Color color;
-
-        public MethodIcon(String method, Color color) {
-            this.method = method != null ? method.toUpperCase() : "";
-            this.color = color;
-        }
-
-        @Override
-        public void paintIcon(Component c, Graphics g, int x, int y) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(color);
-            int width = getIconWidth();
-            int height = getIconHeight();
-            g2.fillRoundRect(x, y + 2, width, height - 4, 10, 10);
-            g2.setColor(Color.WHITE);
-            Font font = c.getFont().deriveFont(Font.BOLD, 12f);
-            g2.setFont(font);
-            FontMetrics fm = c.getFontMetrics(font);
-            int strWidth = fm.stringWidth(method);
-            int strX = x + (width - strWidth) / 2;
-            int strY = y + height / 2 + fm.getAscent() / 2 - 2;
-            g2.drawString(method, strX, strY);
-            g2.dispose();
-        }
-
-        @Override
-        public int getIconWidth() {
-            return 52; // 统一宽度，保证所有方法块对齐
-        }
-
-        @Override
-        public int getIconHeight() {
-            return 20;
-        }
-    }
 
     // 防抖触发方法
     private void debounceShowOrUpdateResultPopup() {
@@ -1270,10 +1128,10 @@ public class ApiSearchPopup {
     // 三方包勾选切换
     private void onIncludeLibsBoxChanged() {
         ProjectCache projectCache = getProjectCache();
-        if (includeLibsBox.isSelected() && projectCache.allCacheReady) {
+        if (includeLibsBox.isSelected() && projectCache.isAllCacheReady()) {
             return;
         }
-        if (!includeLibsBox.isSelected() && projectCache.projectCacheReady) {
+        if (!includeLibsBox.isSelected() && projectCache.isProjectCacheReady()) {
             return;
         }
         // 强制重置过滤状态，确保刷新后重新过滤
@@ -1338,40 +1196,6 @@ public class ApiSearchPopup {
     /**
      * 轻量级接口查询专用数据结构，避免冗余字段和内存浪费
      */
-    private static class ApiSearchEntry {
-        final String url;
-        final String httpMethod;
-        final String methodName;
-        final String className;
-        final String description;
-        final List<String> paramTypes;
-        final long timestamp;
-
-        ApiSearchEntry(String url, String httpMethod, String methodName, String className, String description, List<String> paramTypes) {
-            this.url = url;
-            this.httpMethod = httpMethod;
-            this.methodName = methodName;
-            this.className = className;
-            this.description = description;
-            this.paramTypes = paramTypes != null ? paramTypes : java.util.Collections.emptyList();
-            this.timestamp = System.currentTimeMillis();
-        }
-
-        String getDisplayText() {
-            return String.format("<html>%s&nbsp;&nbsp;%s&nbsp;&nbsp;<span style='color:#888888;'>%s#%s</span></html>",
-                    url != null ? url : "",
-                    description != null && !description.isEmpty() ? description : (methodName != null ? methodName : ""),
-                    className != null ? className : "",
-                    methodName != null ? methodName : "");
-        }
-
-        @Override
-        public String toString() {
-            return (methodName != null ? methodName : "") + "（" + (url != null ? url : "") + ")";
-        }
-    }
-
-    // 在ApiSearchPopup类中添加highlight方法
     private String highlight(String text, String keyword) {
         if (text == null || keyword == null || keyword.isEmpty()) {
             return text;
@@ -1427,8 +1251,8 @@ public class ApiSearchPopup {
         ProjectCache projectCache = projectCacheMap.computeIfAbsent(project.getName(), ProjectCache::new);
 
         if (includeLibs) {
-            projectCache.allApisCache.clear();
-            projectCache.allCacheReady = false;
+            projectCache.clearAllApisCache();
+            projectCache.setAllCacheReady(false);
             ApplicationManager.getApplication().executeOnPooledThread(() -> {
                 try {
                     List<ApiInfo> allRaw = ProjectApiScanner.scanApis(
@@ -1438,14 +1262,14 @@ public class ApiSearchPopup {
                     for (ApiInfo info : allRaw) {
                         all.add(new ApiSearchEntry(info.getUrl(), info.getHttpMethod(), info.getMethodName(), info.getClassName(), info.getNameOrDescription(), info.getParamTypes()));
                     }
-                    projectCache.allApisCache.clear();
-                    projectCache.allApisCache.addAll(all);
-                    projectCache.allCacheReady = true;
+                    projectCache.clearAllApisCache();
+                    projectCache.getAllApisCache().addAll(all);
+                    projectCache.setAllCacheReady(true);
                     LogUtil.info("[ApiSearchPopup] [" + now() + "] All APIs cached for project " + project.getName() + ": " + all.size());
 
                     // 更新性能统计
                     try {
-                        PerformanceMonitor.updatePluginCacheSize(projectCache.allApisCache.size());
+                        PerformanceMonitor.updatePluginCacheSize(projectCache.getAllApisCache().size());
                         PerformanceMonitor.updatePluginApiCount(all.size());
                     } catch (Exception e) {
                         // 静默处理性能统计异常
@@ -1463,8 +1287,8 @@ public class ApiSearchPopup {
                 }
             });
         } else {
-            projectCache.projectApisCache.clear();
-            projectCache.projectCacheReady = false;
+            projectCache.clearProjectApisCache();
+            projectCache.setProjectCacheReady(false);
             ApplicationManager.getApplication().executeOnPooledThread(() -> {
                 try {
                     List<ApiInfo> allRaw = ProjectApiScanner.scanApis(
@@ -1474,13 +1298,13 @@ public class ApiSearchPopup {
                     for (ApiInfo info : allRaw) {
                         all.add(new ApiSearchEntry(info.getUrl(), info.getHttpMethod(), info.getMethodName(), info.getClassName(), info.getNameOrDescription(), info.getParamTypes()));
                     }
-                    projectCache.projectApisCache.clear();
-                    projectCache.projectApisCache.addAll(all);
-                    projectCache.projectCacheReady = true;
+                    projectCache.clearProjectApisCache();
+                    projectCache.getProjectApisCache().addAll(all);
+                    projectCache.setProjectCacheReady(true);
                     LogUtil.info("[ApiSearchPopup] [" + now() + "] Project APIs cached for project " + project.getName() + ": " + all.size());
                     // 更新性能统计
                     try {
-                        PerformanceMonitor.updatePluginCacheSize(projectCache.projectApisCache.size());
+                        PerformanceMonitor.updatePluginCacheSize(projectCache.getProjectApisCache().size());
                         PerformanceMonitor.updatePluginApiCount(all.size());
                     } catch (Exception e) {
                         // 静默处理性能统计异常
@@ -1507,10 +1331,10 @@ public class ApiSearchPopup {
         // 弹窗初始化搜索模式：弹窗首次打开时扫描一次，缓存后复用
         ProjectCache projectCache = getProjectCache();
         if ("popup_init".equals(currentMode)) {
-            if (includeLibsBox.isSelected() && projectCache.allCacheReady) {
+            if (includeLibsBox.isSelected() && projectCache.isAllCacheReady()) {
                 return;
             }
-            if (!includeLibsBox.isSelected() && projectCache.projectCacheReady) {
+            if (!includeLibsBox.isSelected() && projectCache.isProjectCacheReady()) {
                 return;
             }
         }
@@ -1523,10 +1347,10 @@ public class ApiSearchPopup {
             loadingLabel.setVisible(true);
         }
 
-        projectCache.projectApisCache.clear();
-        projectCache.allApisCache.clear();
-        projectCache.projectCacheReady = false;
-        projectCache.allCacheReady = false;
+        projectCache.clearProjectApisCache();
+        projectCache.clearAllApisCache();
+        projectCache.setProjectCacheReady(false);
+        projectCache.setAllCacheReady(false);
         logMemory("before projectApisCache赋值");
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             // 根据第三方包勾选状态决定扫描范围
@@ -1543,26 +1367,26 @@ public class ApiSearchPopup {
             // 根据扫描范围决定存储到哪个缓存
             if (includeLibsBox.isSelected()) {
                 // 扫描包含第三方包，存储到 allApisCache
-                projectCache.allApisCache.clear();
-                projectCache.allApisCache.addAll(all);
-                projectCache.allCacheReady = true;
-                LogUtil.debug("[ApiSearchPopup] [" + now() + "] allApisCache size: " + projectCache.allApisCache.size());
+                projectCache.clearAllApisCache();
+                projectCache.getAllApisCache().addAll(all);
+                projectCache.setAllCacheReady(true);
+                LogUtil.debug("[ApiSearchPopup] [" + now() + "] allApisCache size: " + projectCache.getAllApisCache().size());
                 // 更新性能统计
                 try {
-                    PerformanceMonitor.updatePluginCacheSize(projectCache.allApisCache.size());
+                    PerformanceMonitor.updatePluginCacheSize(projectCache.getAllApisCache().size());
                     PerformanceMonitor.updatePluginApiCount(all.size());
                 } catch (Exception e) {
                     // 静默处理性能统计异常
                 }
             } else {
                 // 只扫描项目内，存储到 projectApisCache
-                projectCache.projectApisCache.clear();
-                projectCache.projectApisCache.addAll(all);
-                projectCache.projectCacheReady = true;
-                LogUtil.debug("[ApiSearchPopup] [" + now() + "] projectApisCache size: " + projectCache.projectApisCache.size());
+                projectCache.clearProjectApisCache();
+                projectCache.getProjectApisCache().addAll(all);
+                projectCache.setProjectCacheReady(true);
+                LogUtil.debug("[ApiSearchPopup] [" + now() + "] projectApisCache size: " + projectCache.getProjectApisCache().size());
                 // 更新性能统计
                 try {
-                    PerformanceMonitor.updatePluginCacheSize(projectCache.projectApisCache.size());
+                    PerformanceMonitor.updatePluginCacheSize(projectCache.getProjectApisCache().size());
                     PerformanceMonitor.updatePluginApiCount(all.size());
                 } catch (Exception e) {
                     // 静默处理性能统计异常
@@ -1610,17 +1434,17 @@ public class ApiSearchPopup {
      */
     public static String getCacheStats() {
         StringBuilder stats = new StringBuilder();
-        stats.append("=== RequestMan 缓存统计 ===\n");
-        stats.append("项目缓存数量: ").append(projectCacheMap.size()).append("\n");
+        stats.append(RequestManBundle.message("search.cache.stats.title")).append("\n");
+        stats.append(RequestManBundle.message("search.cache.project.count")).append(": ").append(projectCacheMap.size()).append("\n");
 
         for (java.util.Map.Entry<String, ProjectCache> entry : projectCacheMap.entrySet()) {
             String projectName = entry.getKey();
             ProjectCache cache = entry.getValue();
-            stats.append("项目: ").append(projectName).append("\n");
-            stats.append("  项目接口缓存: ").append(cache.projectApisCache.size()).append(" 条\n");
-            stats.append("  全量接口缓存: ").append(cache.allApisCache.size()).append(" 条\n");
-            stats.append("  项目缓存就绪: ").append(cache.projectCacheReady).append("\n");
-            stats.append("  全量缓存就绪: ").append(cache.allCacheReady).append("\n");
+            stats.append(RequestManBundle.message("search.cache.project")).append(": ").append(projectName).append("\n");
+            stats.append("  ").append(RequestManBundle.message("search.cache.project.apis")).append(": ").append(cache.getProjectApisCache().size()).append(" ").append(RequestManBundle.message("search.cache.count.unit")).append("\n");
+            stats.append("  ").append(RequestManBundle.message("search.cache.all.apis")).append(": ").append(cache.getAllApisCache().size()).append(" ").append(RequestManBundle.message("search.cache.count.unit")).append("\n");
+            stats.append("  ").append(RequestManBundle.message("search.cache.project.ready")).append(": ").append(cache.isProjectCacheReady()).append("\n");
+            stats.append("  ").append(RequestManBundle.message("search.cache.all.ready")).append(": ").append(cache.isAllCacheReady()).append("\n");
         }
 
         return stats.toString();
