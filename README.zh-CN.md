@@ -1,5 +1,7 @@
 # RequestMan
 
+SPDX-License-Identifier: GPL-3.0-or-later
+
 <div align="center">
 
 **Language / 语言**: [English](README.md) | [简体中文](README.zh-CN.md)
@@ -12,9 +14,9 @@
 
 **一款集成于 IntelliJ IDEA 的接口调试与文档生成工具**
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
+[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
 [![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ%20IDEA-2024.1+-green.svg)](https://www.jetbrains.com/idea/)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 </div>
 
@@ -38,6 +40,7 @@ RequestMan 是一款专为 IntelliJ IDEA 开发的接口调试与文档生成插
 
 ### 🌍 环境与变量管理
 - **环境管理**：支持开发、测试、生产等多环境配置
+- **多模块支持**：支持微服务架构的多模块前缀配置
 - **全局变量**：支持全局变量的增删改查，使用 `{{变量名}}` 动态引用
 - **参数持久化**：接口参数、请求体、Headers、Cookies 等自动持久化
 - **缓存优化**：智能缓存机制，提升性能
@@ -272,6 +275,16 @@ src/main/java/com/ljh/request/requestman/
 
 ## 📝 更新日志
 
+### v1.0.3
+- ✨ 环境配置多模块支持，包含智能检测和缓存优化
+- ✨ 请求取消功能，支持中断正在进行的HTTP请求
+- ✨ 增强的API反向定位服务，支持智能搜索、实时过滤和高亮显示
+
+### v1.0.2
+- 🚀 过滤 HttpServletResponse 等基础设施型参数，避免被识别为入参
+- 🚀 全局认证 header 支持自定义 key（默认 Authorization），设置项新增"全局认证 key/value"并已国际化
+- 🚀 上传/下载与目录选择弹窗替换为 IDE 原生文件选择器（支持输入路径与搜索），提升可用性
+
 ### v1.0.1
 - ✨ Path参数动态URL更新功能
 - ✨ 自动保存控制功能，支持用户偏好设置
@@ -335,7 +348,7 @@ src/main/java/com/ljh/request/requestman/
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+本项目采用 GNU 通用公共许可证第 3 版或更新版本（GPL-3.0-or-later） - 查看 [LICENSE](LICENSE) 文件了解详情。
 
 ## 🙏 致谢
 

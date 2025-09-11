@@ -1,5 +1,7 @@
 # RequestMan
 
+SPDX-License-Identifier: GPL-3.0-or-later
+
 <div align="center">
 
 **Language / 语言**: [English](README.md) | [简体中文](README.zh-CN.md)
@@ -12,9 +14,9 @@
 
 **An API Testing and Documentation Tool Integrated with IntelliJ IDEA**
 
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
+[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)](https://plugins.jetbrains.com/plugin/request-man)
 [![IntelliJ IDEA](https://img.shields.io/badge/IntelliJ%20IDEA-2024.1+-green.svg)](https://www.jetbrains.com/idea/)
-[![License](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 </div>
 
@@ -38,6 +40,7 @@ RequestMan is an API testing and documentation plugin specifically developed for
 
 ### 🌍 Environment and Variable Management
 - **Environment Management**: Supports development, testing, production, and other multi-environment configurations
+- **Multi-Module Support**: Supports multi-module prefix configuration for microservice architectures
 - **Global Variables**: Supports CRUD operations for global variables, using `{{variableName}}` for dynamic references
 - **Parameter Persistence**: API parameters, request bodies, Headers, Cookies, etc. are automatically persisted
 - **Cache Optimization**: Intelligent caching mechanism for improved performance
@@ -78,11 +81,11 @@ RequestMan is an API testing and documentation plugin specifically developed for
 
 1. Open `File` → `Settings` → `RequestMan Settings`
 2. Configure environment management:
-    - Add development, testing, production environments
-    - Set base URLs for each environment
+  - Add development, testing, production environments
+  - Set base URLs for each environment
 3. Configure global variables:
-    - Add commonly used global variables
-    - Use `{{variableName}}` format for references
+  - Add commonly used global variables
+  - Use `{{variableName}}` format for references
 
 ![RequestMan Settings](docs/images/settings.png)
 
@@ -272,13 +275,23 @@ src/main/java/com/ljh/request/requestman/
 
 ## 📝 Changelog
 
+### v1.0.3
+- ✨ Environment configuration multi-module support with intelligent detection and caching
+- ✨ Request cancellation functionality to interrupt ongoing HTTP requests
+- ✨ Enhanced API reverse location service with intelligent search, real-time filtering, and highlighted results
+
+### v1.0.2
+- 🚀 Filter infrastructure parameters such as HttpServletResponse to avoid being treated as inputs
+- 🚀 Global auth header key is configurable (default Authorization), added "Global Auth Key/Value" in settings with i18n
+- 🚀 Replaced JFileChooser with IDE-native file dialogs for upload/download and directory picking
+
 ### v1.0.1
 - ✨ Path parameter dynamic URL update functionality
 - ✨ Auto-save control functionality with user preference settings
-   - Silent save option
-   - Save prompt before leaving
-   - Visual indicator for unsaved state
-   - Save button state management
+  - Silent save option
+  - Save prompt before leaving
+  - Visual indicator for unsaved state
+  - Save button state management
 - ✨ JSON structure panel supporting recursive structure, can handle complex nested parameters
 - 🚀 Improved Path parameter functionality, fixed listener issues and entity recursion
 - 🐛 Replaced deprecated and experimental APIs with stable alternatives
@@ -335,7 +348,7 @@ src/main/java/com/ljh/request/requestman/
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0 or later (GPL-3.0-or-later) - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
